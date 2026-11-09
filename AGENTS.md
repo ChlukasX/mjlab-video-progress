@@ -30,6 +30,9 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 - `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
   `ConfigError`). Rejects unknown keys, wrong types, non-positive ints and empty strings
   (except inside `render.extra_args`).
+- `discovery.py`: `parse_train_argv(argv)` turns a process argument list into
+  `TrainCommand(task, log_root)`, or `None` if it is not a `python .../train <task>` command.
+  Pure function, no filesystem or process access.
 
 ## Hard rules (do not break)
 
@@ -48,8 +51,21 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   changes. `from __future__ import annotations` is used throughout.
 - Sinks get injected transports so tests never hit the network. New behavior needs a unit test.
 
+## Known gaps (deliberately not handled in v1)
+
+Edge cases in `discovery.parse_train_argv` that were considered and left out because real
+command lines are unlikely to hit them. Not covered by tests; revisit if discovery misfires.
+
+- Repeated `--log-root`: the last occurrence wins (argparse behaviour); this is not specified.
+- A value that is itself `--log-root` (`--log-root --log-root`) is also scanned as a flag, so
+  the dangling second one makes the whole command line a non-match (`None`).
+- The interpreter pattern `python(3(\.\d+)*)?` rejects `python2` and `python3.` but accepts
+  odd versions such as `python3.1.2`.
+
 ## Verification status (do not overclaim)
 
-Only the config loader (`config.py`) is implemented. It is covered by unit tests
-(`tests/test_config.py`, 41 passing, plus ruff clean). The watch loop, render, bundle and sinks
-are not implemented yet. Nothing has been run against a real mjlab training run.
+Only the config loader (`config.py`) and the train-command parser (`discovery.py`) are
+implemented. They are covered by unit tests only (`tests/test_config.py`, 41 passing, and
+`tests/test_discovery.py`, 16 passing; 57 total, plus ruff clean). The watch loop, render, bundle
+and sinks are not implemented yet. Nothing has been run against a real mjlab training run; the
+parser has only been checked against the shape of one captured uv-venv command line.
