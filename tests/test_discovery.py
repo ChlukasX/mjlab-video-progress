@@ -1,4 +1,5 @@
-"""Contract tests for discovery: parse_train_argv, find_train_processes and find_run_dir."""
+"""Contract tests for discovery: parse_train_argv, find_train_processes, find_run_dir and
+find_latest_run_dir."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from mjlab_video_progress.discovery import (
     RunDirNotFound,
     TrainCommand,
     TrainProcess,
+    find_latest_run_dir,
     find_run_dir,
     find_train_processes,
     parse_train_argv,
@@ -258,3 +260,82 @@ def test_real_proc_cwd(tmp_path, monkeypatch):
     run = add_run(tmp_path / "logs/rsl_rl", os.getpid())
     process = TrainProcess(os.getpid(), TrainCommand(task=TASK))
     assert find_run_dir(process) == run.resolve()
+
+
+# find_latest_run_dir: the pid add_run writes into the tfevents name does not matter here.
+
+
+def test_latest_single_run(tmp_path):
+    run = add_run(tmp_path, PID)
+    assert find_latest_run_dir(tmp_path) == run
+
+
+def test_latest_by_name_across_experiments(tmp_path):
+    new = add_run(tmp_path, PID, "a_exp/2026-11-09_12-00-00")
+    add_run(tmp_path, PID, "z_exp/2026-11-01_10-00-00")  # experiment name sorts later
+    assert find_latest_run_dir(tmp_path) == new
+
+
+def test_run_name_suffix_sorted_by_timestamp(tmp_path):
+    new = add_run(tmp_path, PID, "exp/2026-11-09_12-00-00_cur7")
+    add_run(tmp_path, PID, "exp/2026-11-09_11-00-00_zzz")
+    assert find_latest_run_dir(tmp_path) == new
+
+
+def test_name_wins_over_mtime(tmp_path):
+    new = add_run(tmp_path, PID, "exp/2026-11-09_12-00-00")
+    add_run(tmp_path, PID, "exp/2026-11-01_10-00-00")  # written just now
+    for p in [new, *new.rglob("*")]:
+        os.utime(p, (1_000_000_000, 1_000_000_000))  # newer-named run untouched since 2001
+    assert find_latest_run_dir(tmp_path) == new
+
+
+def test_starting_run_without_tfevents_is_latest(tmp_path):
+    add_run(tmp_path, PID, "exp/2026-11-01_10-00-00")
+    starting = tmp_path / "exp/2026-11-09_12-00-00"
+    (starting / "params").mkdir(parents=True)  # params dumped, runner not built yet
+    assert find_latest_run_dir(tmp_path) == starting
+
+
+def test_non_run_dirs_ignored(tmp_path):
+    run = add_run(tmp_path, PID, "exp/2026-11-01_10-00-00")
+    cache = tmp_path / "exp/wandb_checkpoints/abc123"  # mjlab's W&B download cache
+    cache.mkdir(parents=True)
+    (cache / "model_100.pt").write_bytes(b"\0")
+    (tmp_path / "exp/zzz").mkdir()  # sorts after every timestamp
+    (tmp_path / "exp/2026-12-01_00-00-00.bak").mkdir()  # not mjlab's name format
+    (tmp_path / "exp/2026-12-02_00-00-00").write_text("x")  # a file, not a dir
+    (tmp_path / "exp/deep/2026-12-03_00-00-00").mkdir(parents=True)  # three levels down
+    (tmp_path / "2026-12-04_00-00-00").mkdir()  # one level down (an experiment dir)
+    assert find_latest_run_dir(tmp_path) == run
+
+
+def test_latest_missing_log_root_not_found(tmp_path):
+    with pytest.raises(RunDirNotFound) as e:
+        find_latest_run_dir(tmp_path / "missing")
+    assert str(tmp_path / "missing") in str(e.value)
+
+
+def test_no_runs_not_found(tmp_path):
+    (tmp_path / "exp/wandb_checkpoints/abc123").mkdir(parents=True)
+    with pytest.raises(RunDirNotFound) as e:
+        find_latest_run_dir(tmp_path)
+    assert str(tmp_path) in str(e.value)
+
+
+def test_same_name_in_two_experiments_ambiguous(tmp_path):
+    a = add_run(tmp_path, PID, "a_exp/2026-11-09_12-00-00")
+    b = add_run(tmp_path, PID, "b_exp/2026-11-09_12-00-00")
+    add_run(tmp_path, PID, "c_exp/2026-11-01_10-00-00")
+    with pytest.raises(RunDirNotFound) as e:
+        find_latest_run_dir(tmp_path)
+    assert str(a) in str(e.value) and str(b) in str(e.value)
+
+
+def test_fallback_leaves_logs_tree_identical(tmp_path):
+    add_run(tmp_path, PID, "a_exp/2026-11-09_12-00-00")
+    add_run(tmp_path, PID, "b_exp/2026-11-01_10-00-00")
+    (tmp_path / "a_exp/wandb_checkpoints/abc123").mkdir(parents=True)
+    before = snapshot(tmp_path)
+    find_latest_run_dir(tmp_path)
+    assert snapshot(tmp_path) == before

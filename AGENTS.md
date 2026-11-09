@@ -39,6 +39,12 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   `find_run_dir(process, proc_root)` returns the run dir: under `<cwd>/<log root>` (default
   `logs/rsl_rl`), the one `*/*/` dir holding `events.out.tfevents.*.<hostname>.<pid>.0`.
   Otherwise it raises `RunDirNotFound` with the reason (no cwd, no match, ambiguous). Read-only.
+  `find_latest_run_dir(log_root)` is the directory fallback: among the `*/*` dirs named like
+  mjlab's `YYYY-MM-DD_HH-MM-SS[_<run_name>]`, it returns the one with the highest name across
+  all experiments (never reads mtime). Otherwise `RunDirNotFound` (not a dir, no run dir, newest
+  name in several experiments). Read-only. Not wired up yet: the planned glue uses it only when
+  no training process is found, takes the task from `watch.task` (error if unset), and lets a
+  found process's task win over `watch.task`. Without `watch.log_root` there is no fallback.
 
 ## Hard rules (do not break)
 
@@ -80,19 +86,30 @@ guesses; only the ambiguous case is tested):
   The fix would be to filter by the process start time (`/proc/<pid>/stat` + `/proc/stat` btime).
 - `~` in `--log-root` is not expanded (mjlab does not expand it either).
 
+Cases `discovery.find_latest_run_dir` does not handle (it picks by dir name only; not tested):
+
+- A finished run: if the newest run dir is a finished run, it is returned anyway; no new
+  checkpoints appear, so `watch` would idle.
+- A run in env setup: mjlab creates the run dir only when it dumps `params/`, after the env is
+  built. Until then the previous run is returned.
+- Clock or time-zone changes between runs: names are local time, so name order can differ from
+  start order.
+
 Also deferred: a config key to override the process match. Launchers the strict rule does not
-match (`python -m mjlab.scripts.train`, wrappers) are left to the planned `watch.log_root`
-directory fallback, which is not built yet. Add the key only when a real launcher is missed.
+match (`python -m mjlab.scripts.train`, wrappers) are left to the `watch.log_root` directory
+fallback (`find_latest_run_dir`, not wired up yet). Add the key only when a real launcher is
+missed.
 
 ## Verification status (do not overclaim)
 
-Only the config loader (`config.py`), the train-command parser, the `/proc` process listing and
-the run-dir lookup (`discovery.py`) are implemented. They are covered by unit tests only
-(`tests/test_config.py`, 41 passing, and `tests/test_discovery.py`, 36 passing plus 2 skipped
-on macOS; 77 passing in total, plus ruff clean). The skipped tests are the real-`/proc` tests
-(process listing smoke test, run-dir lookup via the real `cwd` link), which have not been run on
-Linux yet; otherwise discovery is tested against a fake `/proc` tree only. The directory
-fallback, the watch loop, render, bundle and sinks are not implemented yet. Nothing has been run
-against a real mjlab training run; the parser has only been checked against the shape of one
-captured uv-venv command line, and the run-dir lookup only against the mjlab 1.6.0 and
-tensorboard source.
+Only the config loader (`config.py`), the train-command parser, the `/proc` process listing, the
+run-dir lookup and the directory fallback (`discovery.py`) are implemented. They are covered by
+unit tests only (`tests/test_config.py`, 41 passing, and `tests/test_discovery.py`, 46 passing
+plus 2 skipped on macOS; 87 passing in total, plus ruff clean). The skipped tests are the
+real-`/proc` tests (process listing smoke test, run-dir lookup via the real `cwd` link), which
+have not been run on Linux yet; otherwise discovery is tested against a fake `/proc` tree and
+fake logs trees only. The glue that chooses between process discovery and the fallback, the
+watch loop, render, bundle and sinks are not implemented yet. Nothing has been run against a
+real mjlab training run; the parser has only been checked against the shape of one captured
+uv-venv command line, and the run-dir lookup and the fallback only against the mjlab 1.6.0,
+rsl_rl 5.4.2 and tensorboard source.

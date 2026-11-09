@@ -29,16 +29,31 @@ Contract for ``find_run_dir(process, proc_root)``:
   (wrong root, or the run is still starting: tfevents appear only after env setup), or several
   matches (a reused pid; it never guesses). Read-only: one readlink and one glob.
 
+Contract for ``find_latest_run_dir(log_root)`` (the directory fallback):
+
+- ``log_root`` means the same as mjlab's ``--log-root``: the dir holding ``<experiment>/<run>``.
+- Candidates are the dirs exactly two levels down named like mjlab's run dirs,
+  ``YYYY-MM-DD_HH-MM-SS[_<run_name>]``; anything else (``wandb_checkpoints``, stray dirs, files,
+  deeper dirs) is ignored. Returns the candidate with the highest name across all experiments
+  (name order is start order). mtime is never read, so a starting run with only ``params/``
+  counts and a finished run is returned when it is the newest.
+- Raises ``RunDirNotFound`` naming ``log_root`` and why: not a directory, no candidate, or the
+  newest name in several experiments (it never guesses). Read-only: one glob and a stat per
+  candidate.
+
 Unverified: only a uv-venv command line from a single live run was captured. A system-Python
 install, ``python -m mjlab.scripts.train``, other launchers, multi-GPU children and wrapper
 variations have not been observed. Processes that rewrite their own cmdline are not handled.
 ``find_run_dir`` follows the mjlab 1.6.0 and tensorboard source and has not been run against a
 live training. Not handled: multi-GPU runs (torchrunx workers write tfevents with their own
 pid), PID namespaces (a container watched from the host) and a single stale match left by a
-reused pid while the live run is still starting.
+reused pid while the live run is still starting. ``find_latest_run_dir`` follows the mjlab
+1.6.0 source only; it cannot tell a finished run from a live one, returns the previous run while
+a new one is still in env setup (no run dir yet), and can misorder runs across a clock or
+time-zone change (names are local time).
 
-Status: implemented; verified only by tests/test_discovery.py against a fake ``/proc`` tree.
-The real-``/proc`` tests run on Linux only.
+Status: implemented; verified only by tests/test_discovery.py against a fake ``/proc`` tree and
+fake logs trees. The real-``/proc`` tests run on Linux only.
 """
 
 from __future__ import annotations
@@ -123,3 +138,20 @@ def find_run_dir(process: TrainProcess, proc_root: Path = Path("/proc")) -> Path
     if len(runs) > 1:
         raise RunDirNotFound(f"pid {pid}: ambiguous, {len(runs)} run dirs match: {runs}")
     return runs[0]
+
+
+# mjlab 1.6.0 launch_training: datetime.now().strftime("%Y-%m-%d_%H-%M-%S") [+ "_" + run_name].
+_RUN_NAME = re.compile(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(_.+)?")
+
+
+def find_latest_run_dir(log_root: Path) -> Path:
+    if not log_root.is_dir():
+        raise RunDirNotFound(f"log root {log_root} is not a directory")
+    runs = [p for p in log_root.glob("*/*") if _RUN_NAME.fullmatch(p.name) and p.is_dir()]
+    if not runs:
+        raise RunDirNotFound(f"no <experiment>/<YYYY-MM-DD_HH-MM-SS[_name]> dir under {log_root}")
+    newest = max(p.name for p in runs)
+    latest = sorted(p for p in runs if p.name == newest)
+    if len(latest) > 1:
+        raise RunDirNotFound(f"ambiguous, {len(latest)} run dirs named {newest}: {latest}")
+    return latest[0]
