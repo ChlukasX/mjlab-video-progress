@@ -178,6 +178,12 @@ def test_absolute_log_root_ignores_cwd(tmp_path):
     assert find_run_dir(process, proc) == run
 
 
+def test_tilde_log_root_is_literal_like_mjlab(tmp_path):
+    proc, repo, process = train_process(tmp_path, log_root="~/x")  # `--log-root=~/x`: unexpanded
+    run = add_run(repo / "~/x", PID)  # mjlab joins it as-is, so it writes <cwd>/~/x
+    assert find_run_dir(process, proc) == run
+
+
 def test_any_experiment_name(tmp_path):
     proc, repo, process = train_process(tmp_path)
     add_run(repo / "logs/rsl_rl", 999, "a_exp/2026-11-01_10-00-00")

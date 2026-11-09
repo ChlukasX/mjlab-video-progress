@@ -9,6 +9,9 @@ Contract:
 - Integers must be ``int`` (not ``bool``) and strictly positive.
 - Empty strings are rejected (``watch.task``, paths, ``render.command`` elements), except
   inside ``render.extra_args``.
+- A leading ``~`` or ``~user`` in a path expands to that home directory, the way a shell expands
+  ``--log-root ~/x`` before mjlab sees it (mjlab itself never expands ``~``). An unknown user or
+  a missing home directory raises ``ConfigError`` naming the key. A ``~`` elsewhere is literal.
 - Relative paths resolve against the config file's directory; absolute paths are unchanged.
 - Loading never touches the filesystem under ``watch.log_root`` (hard rule 1).
 
@@ -72,7 +75,11 @@ def _str(value, key, base):
 
 
 def _path(value, key, base):
-    return base / _str(value, key, base)  # joining an absolute path keeps it unchanged
+    try:
+        path = Path(_str(value, key, base)).expanduser()
+    except RuntimeError as e:  # ~user of an unknown user, or no home directory
+        raise ConfigError(f"{key}: cannot expand ~ in {value!r}") from e
+    return base / path  # joining an absolute path keeps it unchanged
 
 
 def _strs(value, key, base):

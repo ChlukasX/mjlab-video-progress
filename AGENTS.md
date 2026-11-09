@@ -29,7 +29,8 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 
 - `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
   `ConfigError`). Rejects unknown keys, wrong types, non-positive ints and empty strings
-  (except inside `render.extra_args`).
+  (except inside `render.extra_args`). Expands a leading `~` in paths, like a shell would for
+  `--log-root ~/x`, then resolves relative paths against the config file.
 - `discovery.py`: `parse_train_argv(argv)` turns a process argument list into
   `TrainCommand(task, log_root)`, or `None` if it is not a `python .../train <task>` command.
   Pure function, no filesystem or process access.
@@ -39,6 +40,8 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   `find_run_dir(process, proc_root)` returns the run dir: under `<cwd>/<log root>` (default
   `logs/rsl_rl`), the one `*/*/` dir holding `events.out.tfevents.*.<hostname>.<pid>.0`.
   Otherwise it raises `RunDirNotFound` with the reason (no cwd, no match, ambiguous). Read-only.
+  A `~` that reaches `--log-root` unexpanded (`--log-root=~/x`; bash and zsh leave it) is taken
+  literally, as mjlab does: mjlab writes `<cwd>/~/x`, and the lookup looks there.
   `find_latest_run_dir(log_root)` is the directory fallback: among the `*/*` dirs named like
   mjlab's `YYYY-MM-DD_HH-MM-SS[_<run_name>]`, it returns the one with the highest name across
   all experiments (never reads mtime). Otherwise `RunDirNotFound` (not a dir, no run dir, newest
@@ -84,7 +87,6 @@ guesses; only the ambiguous case is tested):
 - A reused pid: an old run with the same pid and hostname is reported as ambiguous. While the
   live run is still starting (no tfevents yet), that old run is returned as the only match.
   The fix would be to filter by the process start time (`/proc/<pid>/stat` + `/proc/stat` btime).
-- `~` in `--log-root` is not expanded (mjlab does not expand it either).
 
 Cases `discovery.find_latest_run_dir` does not handle (it picks by dir name only; not tested):
 
@@ -104,8 +106,8 @@ missed.
 
 Only the config loader (`config.py`), the train-command parser, the `/proc` process listing, the
 run-dir lookup and the directory fallback (`discovery.py`) are implemented. They are covered by
-unit tests only (`tests/test_config.py`, 41 passing, and `tests/test_discovery.py`, 46 passing
-plus 2 skipped on macOS; 87 passing in total, plus ruff clean). The skipped tests are the
+unit tests only (`tests/test_config.py`, 44 passing, and `tests/test_discovery.py`, 47 passing
+plus 2 skipped on macOS; 91 passing in total, plus ruff clean). The skipped tests are the
 real-`/proc` tests (process listing smoke test, run-dir lookup via the real `cwd` link), which
 have not been run on Linux yet; otherwise discovery is tested against a fake `/proc` tree and
 fake logs trees only. The glue that chooses between process discovery and the fallback, the

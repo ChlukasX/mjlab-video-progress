@@ -152,6 +152,28 @@ def test_absolute_paths_are_kept(tmp_path):
     assert str(cfg.output.dir) == "/abs/out"
 
 
+def test_leading_tilde_expands_to_home_in_every_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    text = sub("every = 500", 'every = 500\nlog_root = "~/logs/rsl_rl"')
+    text = text.replace("timeout_seconds = 600", 'timeout_seconds = 600\ncwd = "~"')
+    text = text.replace('dir = "progress"', 'dir = "~/progress"')
+    cfg = load_config(write(tmp_path, text))
+    assert cfg.watch.log_root == tmp_path / "home/logs/rsl_rl"
+    assert cfg.render.cwd == tmp_path / "home"
+    assert cfg.output.dir == tmp_path / "home/progress"
+
+
+def test_tilde_not_at_start_is_literal(tmp_path):
+    cfg = load_config(write(tmp_path, sub('dir = "progress"', 'dir = "out/~/x"')))
+    assert cfg.output.dir == tmp_path / "out/~/x"
+
+
+def test_tilde_of_unknown_user_names_key(tmp_path):
+    text = sub('dir = "progress"', 'dir = "~no_such_user_mjvp/x"')
+    with pytest.raises(ConfigError, match=r"output\.dir"):
+        load_config(write(tmp_path, text))
+
+
 @pytest.mark.parametrize(
     ("text", "key"),
     [
