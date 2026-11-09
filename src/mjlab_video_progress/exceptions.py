@@ -1,0 +1,24 @@
+"""Exceptions: every custom exception the package raises, in one place.
+
+Contract:
+
+- ``ConfigError``: raised by ``config.load_config``.
+- ``DiscoveryError`` (a ``LookupError``) and its subclass ``RunDirNotFound``: raised by
+  ``discovery``. Catching ``DiscoveryError`` catches both.
+- The modules that raise them import them from here, so ``config.ConfigError`` and
+  ``discovery.DiscoveryError`` / ``discovery.RunDirNotFound`` are the same classes.
+"""
+
+from __future__ import annotations
+
+
+class ConfigError(Exception):
+    """The config file is missing, malformed or invalid."""
+
+
+class DiscoveryError(LookupError):
+    """Discovery found nothing to watch; the message says why."""
+
+
+class RunDirNotFound(DiscoveryError):
+    """The run dir of a training process could not be located; the message says why."""

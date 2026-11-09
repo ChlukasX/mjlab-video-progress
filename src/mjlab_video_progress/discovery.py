@@ -74,6 +74,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from mjlab_video_progress.exceptions import DiscoveryError, RunDirNotFound
+
 _log = logging.getLogger(__name__)
 _PYTHON = re.compile(r"python(3(\.\d+)*)?")
 
@@ -128,14 +130,6 @@ def find_train_processes(
 
 
 _DEFAULT_LOG_ROOT = "logs/rsl_rl"  # mjlab 1.6.0 TrainConfig.log_root
-
-
-class DiscoveryError(LookupError):
-    """Discovery found nothing to watch; the message says why."""
-
-
-class RunDirNotFound(DiscoveryError):
-    """The run dir of a training process could not be located; the message says why."""
 
 
 def find_run_dir(process: TrainProcess, proc_root: Path = Path("/proc")) -> Path:

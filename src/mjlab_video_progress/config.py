@@ -24,9 +24,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-
-class ConfigError(Exception):
-    """The config file is missing, malformed or invalid."""
+from mjlab_video_progress.exceptions import ConfigError
 
 
 @dataclass(frozen=True)

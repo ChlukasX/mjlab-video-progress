@@ -27,8 +27,11 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 
 ## Code map (`src/mjlab_video_progress/`)
 
+- `exceptions.py`: every custom exception, in one place: `ConfigError`, and `DiscoveryError`
+  with its subclass `RunDirNotFound`. `config` and `discovery` import them from here, so the
+  old import paths (`config.ConfigError`, `discovery.RunDirNotFound`) still work.
 - `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
-  `ConfigError`). Rejects unknown keys, wrong types, non-positive ints and empty strings
+  raises `ConfigError`). Rejects unknown keys, wrong types, non-positive ints and empty strings
   (except inside `render.extra_args`). Expands a leading `~` in paths, like a shell would for
   `--log-root ~/x`, then resolves relative paths against the config file.
 - `discovery.py`: `parse_train_argv(argv)` turns a process argument list into
