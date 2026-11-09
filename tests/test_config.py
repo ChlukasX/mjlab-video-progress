@@ -165,3 +165,46 @@ def test_absolute_paths_are_kept(tmp_path):
 def test_unknown_key_names_full_path(tmp_path, text, key):
     with pytest.raises(ConfigError, match=key):
         load_config(write(tmp_path, text))
+
+
+def test_optional_string_values_are_loaded(tmp_path):
+    text = sub("every = 500", 'every = 500\ntask = "Task-A"')
+    text = text.replace("timeout_seconds = 600", 'timeout_seconds = 600\nextra_args = ["--a", "b"]')
+    cfg = load_config(write(tmp_path, text))
+    assert cfg.watch.task == "Task-A"
+    assert cfg.render.extra_args == ("--a", "b")
+
+
+@pytest.mark.parametrize("bad", ["[1]", '"--a"', '["--a", 2]'])
+def test_extra_args_must_be_list_of_strings(tmp_path, bad):
+    text = sub("timeout_seconds = 600", f"timeout_seconds = 600\nextra_args = {bad}")
+    with pytest.raises(ConfigError, match=r"render\.extra_args"):
+        load_config(write(tmp_path, text))
+
+
+def test_table_that_is_not_a_table_is_rejected(tmp_path):
+    text = "watch = 3\n" + sub("[watch]\nevery = 500\n\n", "")
+    with pytest.raises(ConfigError, match="watch"):
+        load_config(write(tmp_path, text))
+
+
+def test_non_utf8_file_is_a_config_error(tmp_path):
+    path = tmp_path / "cfg.toml"
+    path.write_bytes(b"\xff\xfe\x00bad")
+    with pytest.raises(ConfigError, match="cfg.toml"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "key"),
+    [
+        ('dir = "progress"', 'dir = ""', "output.dir"),
+        ('command = ["uv", "run", "play"]', 'command = [""]', "render.command"),
+        ("every = 500", 'every = 500\ntask = ""', "watch.task"),
+        ("every = 500", 'every = 500\nlog_root = ""', "watch.log_root"),
+        ("timeout_seconds = 600", 'timeout_seconds = 600\ncwd = ""', "render.cwd"),
+    ],
+)
+def test_empty_strings_rejected(tmp_path, old, new, key):
+    with pytest.raises(ConfigError, match=key.replace(".", r"\.")):
+        load_config(write(tmp_path, sub(old, new)))

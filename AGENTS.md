@@ -27,6 +27,10 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 
 ## Code map (`src/mjlab_video_progress/`)
 
+- `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
+  `ConfigError`). Rejects unknown keys, wrong types, non-positive ints and empty strings
+  (except inside `render.extra_args`).
+
 ## Hard rules (do not break)
 
 1. **Read-only on training output.** The tool never starts, stops or signals a training
@@ -46,4 +50,6 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 
 ## Verification status (do not overclaim)
 
-Nothing is implemented or verified yet.
+Only the config loader (`config.py`) is implemented. It is covered by unit tests
+(`tests/test_config.py`, 41 passing, plus ruff clean). The watch loop, render, bundle and sinks
+are not implemented yet. Nothing has been run against a real mjlab training run.

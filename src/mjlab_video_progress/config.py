@@ -7,6 +7,8 @@ Contract:
 - Unknown keys, wrong types, missing required keys and non-positive integers raise
   ``ConfigError`` naming the full key path (for example ``render.timeout_seconds``).
 - Integers must be ``int`` (not ``bool``) and strictly positive.
+- Empty strings are rejected (``watch.task``, paths, ``render.command`` elements), except
+  inside ``render.extra_args``.
 - Relative paths resolve against the config file's directory; absolute paths are unchanged.
 - Loading never touches the filesystem under ``watch.log_root`` (hard rule 1).
 
@@ -64,8 +66,8 @@ def _int(value, key, base):
 
 
 def _str(value, key, base):
-    if not isinstance(value, str):
-        raise ConfigError(f"{key}: must be a string, got {value!r}")
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{key}: must be a non-empty string, got {value!r}")
     return value
 
 
@@ -80,8 +82,8 @@ def _strs(value, key, base):
 
 
 def _command(value, key, base):
-    if not _strs(value, key, base):
-        raise ConfigError(f"{key}: must not be empty")
+    if not _strs(value, key, base) or "" in value:
+        raise ConfigError(f"{key}: must be a non-empty list of non-empty strings")
     return tuple(value)
 
 
