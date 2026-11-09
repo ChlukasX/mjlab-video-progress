@@ -1,0 +1,33 @@
+[project]
+name = "mjlab-video-progress"
+version = "0.1.0"
+description = "Deterministic video progress reports for mjlab RL training runs (watcher, bundle, sinks)"
+readme = "README.md"
+requires-python = ">=3.11"
+# No runtime dependencies: tomllib is in the standard library from Python 3.11.
+dependencies = []
+
+# mjlab is NOT a dependency: the renderer runs in the venv of the consuming repo, which has it.
+# Listing it here would put torch and warp into the lock file of this small tool.
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.12"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+extend-exclude = ["scratch"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
