@@ -1,15 +1,18 @@
-"""Contract tests for discovery: parse_train_argv and find_train_processes."""
+"""Contract tests for discovery: parse_train_argv, find_train_processes and find_run_dir."""
 
 from __future__ import annotations
 
 import dataclasses
 import os
+import socket
 
 import pytest
 
 from mjlab_video_progress.discovery import (
+    RunDirNotFound,
     TrainCommand,
     TrainProcess,
+    find_run_dir,
     find_train_processes,
     parse_train_argv,
 )
@@ -131,3 +134,127 @@ def test_non_utf8_argument_does_not_crash(tmp_path):
 @pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs Linux /proc")
 def test_real_proc_smoke():
     assert isinstance(find_train_processes(), list)
+
+
+PID = 1234
+
+
+def train_process(tmp_path, log_root=None, pid=PID):
+    """Fake proc/<pid>/cwd -> repo (like Linux's magic link); returns (proc, repo, process)."""
+    proc, repo = tmp_path / "proc", tmp_path / "repo"
+    (proc / str(pid)).mkdir(parents=True)
+    repo.mkdir()
+    (proc / str(pid) / "cwd").symlink_to(repo)
+    return proc, repo, TrainProcess(pid, TrainCommand(task=TASK, log_root=log_root))
+
+
+def add_run(log_root, pid, run="exp/2026-11-09_12-00-00", host=None):
+    """Create <log_root>/<experiment>/<run>/ with params/ and the tfevents file of pid."""
+    d = log_root / run
+    (d / "params").mkdir(parents=True)
+    (d / "params" / "agent.yaml").write_text("x")
+    host = socket.gethostname() if host is None else host
+    (d / f"events.out.tfevents.1762689600.{host}.{pid}.0").write_bytes(b"\0")
+    return d
+
+
+def test_run_dir_under_default_log_root(tmp_path):
+    proc, repo, process = train_process(tmp_path)
+    run = add_run(repo / "logs/rsl_rl", PID)
+    assert find_run_dir(process, proc) == run
+
+
+def test_relative_log_root_resolves_against_cwd(tmp_path):
+    proc, repo, process = train_process(tmp_path, log_root="custom/x")
+    run = add_run(repo / "custom/x", PID)
+    assert find_run_dir(process, proc) == run
+
+
+def test_absolute_log_root_ignores_cwd(tmp_path):
+    proc, _, process = train_process(tmp_path, log_root=str(tmp_path / "elsewhere"))
+    run = add_run(tmp_path / "elsewhere", PID)
+    assert find_run_dir(process, proc) == run
+
+
+def test_any_experiment_name(tmp_path):
+    proc, repo, process = train_process(tmp_path)
+    add_run(repo / "logs/rsl_rl", 999, "a_exp/2026-11-01_10-00-00")
+    run = add_run(repo / "logs/rsl_rl", PID, "z_exp/2026-11-09_12-00-00_cur7")
+    assert find_run_dir(process, proc) == run
+
+
+def test_pid_with_matching_suffix_is_not_a_match(tmp_path):
+    proc, repo, process = train_process(tmp_path)
+    add_run(repo / "logs/rsl_rl", 51234)
+    with pytest.raises(RunDirNotFound):
+        find_run_dir(process, proc)
+
+
+def test_dotted_hostname_matches(tmp_path, monkeypatch):
+    monkeypatch.setattr(socket, "gethostname", lambda: "gpu1.lab.local")
+    proc, repo, process = train_process(tmp_path)
+    run = add_run(repo / "logs/rsl_rl", PID, host="gpu1.lab.local")
+    assert find_run_dir(process, proc) == run
+
+
+def test_same_pid_on_other_host_is_not_a_match(tmp_path, monkeypatch):
+    monkeypatch.setattr(socket, "gethostname", lambda: "gpu1")
+    proc, repo, process = train_process(tmp_path)
+    add_run(repo / "logs/rsl_rl", PID, host="gpu2")  # another node on a shared NFS home
+    with pytest.raises(RunDirNotFound):
+        find_run_dir(process, proc)
+
+
+def test_starting_run_without_tfevents_not_found(tmp_path):
+    proc, repo, process = train_process(tmp_path)
+    (repo / "logs/rsl_rl/exp/2026-11-09_12-00-00/params").mkdir(parents=True)
+    with pytest.raises(RunDirNotFound) as e:
+        find_run_dir(process, proc)
+    assert f"pid {PID}" in str(e.value) and str(repo / "logs/rsl_rl") in str(e.value)
+
+
+def test_missing_log_root_not_found(tmp_path):
+    proc, _, process = train_process(tmp_path)
+    with pytest.raises(RunDirNotFound):
+        find_run_dir(process, proc)
+
+
+def test_vanished_process_not_found(tmp_path):
+    proc, repo, _ = train_process(tmp_path)
+    add_run(repo / "logs/rsl_rl", 77)
+    with pytest.raises(RunDirNotFound, match="pid 77"):
+        find_run_dir(TrainProcess(77, TrainCommand(task=TASK)), proc)  # no proc/77/cwd
+
+
+def test_two_runs_for_same_pid_are_ambiguous(tmp_path):
+    proc, repo, process = train_process(tmp_path)
+    old = add_run(repo / "logs/rsl_rl", PID, "exp/2026-01-01_09-00-00")  # pid reused
+    new = add_run(repo / "logs/rsl_rl", PID, "exp/2026-11-09_12-00-00")
+    with pytest.raises(RunDirNotFound) as e:
+        find_run_dir(process, proc)
+    assert str(old) in str(e.value) and str(new) in str(e.value)
+
+
+def snapshot(root):
+    """Bytes (files) and st_mtime_ns of every path under root, root included."""
+    return {
+        p: (p.read_bytes() if p.is_file() else None, p.stat().st_mtime_ns)
+        for p in [root, *root.rglob("*")]
+    }
+
+
+def test_lookup_leaves_logs_tree_identical(tmp_path):
+    proc, repo, process = train_process(tmp_path)
+    add_run(repo / "logs/rsl_rl", PID)
+    add_run(repo / "logs/rsl_rl", 999, "exp/2026-11-01_10-00-00")
+    before = snapshot(repo / "logs")
+    find_run_dir(process, proc)
+    assert snapshot(repo / "logs") == before
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs Linux /proc")
+def test_real_proc_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run = add_run(tmp_path / "logs/rsl_rl", os.getpid())
+    process = TrainProcess(os.getpid(), TrainCommand(task=TASK))
+    assert find_run_dir(process) == run.resolve()

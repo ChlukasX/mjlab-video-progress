@@ -36,6 +36,9 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   `find_train_processes(proc_root, uid)` lists the same-user processes under `/proc` (root
   injectable for tests) whose `cmdline` matches, as `TrainProcess(pid, command)` sorted by pid.
   Read-only.
+  `find_run_dir(process, proc_root)` returns the run dir: under `<cwd>/<log root>` (default
+  `logs/rsl_rl`), the one `*/*/` dir holding `events.out.tfevents.*.<hostname>.<pid>.0`.
+  Otherwise it raises `RunDirNotFound` with the reason (no cwd, no match, ambiguous). Read-only.
 
 ## Hard rules (do not break)
 
@@ -65,17 +68,31 @@ command lines are unlikely to hit them. Not covered by tests; revisit if discove
 - The interpreter pattern `python(3(\.\d+)*)?` rejects `python2` and `python3.` but accepts
   odd versions such as `python3.1.2`.
 
+Cases `discovery.find_run_dir` does not handle (by design it reports "not found" and never
+guesses; only the ambiguous case is tested):
+
+- Multi-GPU runs: torchrunx workers write the tfevents file with their own pid, not the train
+  pid, so the lookup always reports "not found".
+- PID namespaces: a training in a container watched from the host has a different pid in the
+  filename.
+- A reused pid: an old run with the same pid and hostname is reported as ambiguous. While the
+  live run is still starting (no tfevents yet), that old run is returned as the only match.
+  The fix would be to filter by the process start time (`/proc/<pid>/stat` + `/proc/stat` btime).
+- `~` in `--log-root` is not expanded (mjlab does not expand it either).
+
 Also deferred: a config key to override the process match. Launchers the strict rule does not
 match (`python -m mjlab.scripts.train`, wrappers) are left to the planned `watch.log_root`
 directory fallback, which is not built yet. Add the key only when a real launcher is missed.
 
 ## Verification status (do not overclaim)
 
-Only the config loader (`config.py`), the train-command parser and the `/proc` process
-listing (`discovery.py`) are implemented. They are covered by unit tests only
-(`tests/test_config.py`, 41 passing, and `tests/test_discovery.py`, 24 passing plus 1 skipped
-on macOS; 65 passing in total, plus ruff clean). The skipped test is the real-`/proc` smoke test,
-which has not been run on Linux yet; the process listing is otherwise tested against a fake
-`/proc` tree only. Run-dir lookup, the watch loop, render, bundle and sinks are not implemented
-yet. Nothing has been run against a real mjlab training run; the parser has only been checked
-against the shape of one captured uv-venv command line.
+Only the config loader (`config.py`), the train-command parser, the `/proc` process listing and
+the run-dir lookup (`discovery.py`) are implemented. They are covered by unit tests only
+(`tests/test_config.py`, 41 passing, and `tests/test_discovery.py`, 36 passing plus 2 skipped
+on macOS; 77 passing in total, plus ruff clean). The skipped tests are the real-`/proc` tests
+(process listing smoke test, run-dir lookup via the real `cwd` link), which have not been run on
+Linux yet; otherwise discovery is tested against a fake `/proc` tree only. The directory
+fallback, the watch loop, render, bundle and sinks are not implemented yet. Nothing has been run
+against a real mjlab training run; the parser has only been checked against the shape of one
+captured uv-venv command line, and the run-dir lookup only against the mjlab 1.6.0 and
+tensorboard source.

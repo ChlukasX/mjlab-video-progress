@@ -19,18 +19,33 @@ Contract for ``find_train_processes(proc_root, uid)``:
 - Returns ``TrainProcess(pid, command)`` for every match, sorted by pid. A process that vanishes
   or cannot be read mid-scan is skipped. Read-only: never signals or writes anything.
 
+Contract for ``find_run_dir(process, proc_root)``:
+
+- Reads the process cwd with ``os.readlink(proc_root/<pid>/cwd)`` and joins the log root
+  (``--log-root``, else mjlab's default ``logs/rsl_rl``; an absolute one ignores the cwd).
+- Returns the run dir ``<log root>/<experiment>/<run>`` that holds the one file matching
+  ``events.out.tfevents.*.<hostname>.<pid>.0`` (hostname from ``socket.gethostname()``).
+- Raises ``RunDirNotFound`` naming the pid and why: cwd unreadable (process gone), no match
+  (wrong root, or the run is still starting: tfevents appear only after env setup), or several
+  matches (a reused pid; it never guesses). Read-only: one readlink and one glob.
+
 Unverified: only a uv-venv command line from a single live run was captured. A system-Python
 install, ``python -m mjlab.scripts.train``, other launchers, multi-GPU children and wrapper
 variations have not been observed. Processes that rewrite their own cmdline are not handled.
+``find_run_dir`` follows the mjlab 1.6.0 and tensorboard source and has not been run against a
+live training. Not handled: multi-GPU runs (torchrunx workers write tfevents with their own
+pid), PID namespaces (a container watched from the host) and a single stale match left by a
+reused pid while the live run is still starting.
 
 Status: implemented; verified only by tests/test_discovery.py against a fake ``/proc`` tree.
-The real-``/proc`` smoke test runs on Linux only.
+The real-``/proc`` tests run on Linux only.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import socket
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,3 +100,26 @@ def find_train_processes(
         if command:
             found.append(TrainProcess(int(entry.name), command))
     return sorted(found, key=lambda p: p.pid)
+
+
+_DEFAULT_LOG_ROOT = "logs/rsl_rl"  # mjlab 1.6.0 TrainConfig.log_root
+
+
+class RunDirNotFound(LookupError):
+    """The run dir of a training process could not be located; the message says why."""
+
+
+def find_run_dir(process: TrainProcess, proc_root: Path = Path("/proc")) -> Path:
+    pid, log_root = process.pid, process.command.log_root
+    try:
+        cwd = os.readlink(proc_root / str(pid) / "cwd")
+    except OSError as e:  # process exited or is unreadable
+        raise RunDirNotFound(f"pid {pid}: cannot read cwd ({e})") from e
+    root = Path(cwd) / (_DEFAULT_LOG_ROOT if log_root is None else log_root)
+    pattern = f"*/*/events.out.tfevents.*.{socket.gethostname()}.{pid}.0"
+    runs = sorted(p.parent for p in root.glob(pattern))
+    if not runs:
+        raise RunDirNotFound(f"pid {pid}: no {pattern} under {root} (run may still be starting)")
+    if len(runs) > 1:
+        raise RunDirNotFound(f"pid {pid}: ambiguous, {len(runs)} run dirs match: {runs}")
+    return runs[0]
