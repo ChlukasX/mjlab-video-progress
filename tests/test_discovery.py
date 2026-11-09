@@ -1,5 +1,5 @@
-"""Contract tests for discovery: parse_train_argv, find_train_processes, find_run_dir and
-find_latest_run_dir."""
+"""Contract tests for discovery: parse_train_argv, find_train_processes, find_run_dir,
+find_latest_run_dir and discover_runs."""
 
 from __future__ import annotations
 
@@ -10,9 +10,12 @@ import socket
 import pytest
 
 from mjlab_video_progress.discovery import (
+    DiscoveryError,
+    Run,
     RunDirNotFound,
     TrainCommand,
     TrainProcess,
+    discover_runs,
     find_latest_run_dir,
     find_run_dir,
     find_train_processes,
@@ -345,3 +348,101 @@ def test_fallback_leaves_logs_tree_identical(tmp_path):
     before = snapshot(tmp_path)
     find_latest_run_dir(tmp_path)
     assert snapshot(tmp_path) == before
+
+
+# discover_runs: fake proc/<pid> gets both cmdline and the cwd link; logs is mjlab's default root.
+
+OTHER = "Mjlab-Velocity-Flat-Unitree-G1"
+
+
+def glue_dirs(tmp_path):
+    """Returns (proc, repo, logs); proc exists and is empty, repo is every process's cwd."""
+    proc, repo = tmp_path / "proc", tmp_path / "repo"
+    proc.mkdir()
+    return proc, repo, repo / "logs/rsl_rl"
+
+
+def add_train_proc(proc, pid, cwd, task=TASK):
+    d = add_proc(proc, pid, [f"{UV_BIN}/python", f"{UV_BIN}/train", task])
+    (d / "cwd").symlink_to(cwd)
+
+
+def test_process_run_found(tmp_path, caplog):
+    proc, repo, logs = glue_dirs(tmp_path)
+    add_train_proc(proc, PID, repo)
+    run = add_run(logs, PID)
+    assert discover_runs(None, TASK, proc) == [Run(run, TASK)]
+    assert caplog.records == []  # same task as watch.task: nothing to warn about
+
+
+def test_several_processes_all_returned(tmp_path):
+    proc, repo, logs = glue_dirs(tmp_path)
+    add_train_proc(proc, 20, repo, task=OTHER)
+    add_train_proc(proc, 3, repo)
+    late = add_run(logs, 3, "exp/2026-11-09_13-00-00")  # pid order, not run-name order
+    early = add_run(logs, 20, "exp/2026-11-09_12-00-00")
+    assert discover_runs(None, None, proc) == [Run(late, TASK), Run(early, OTHER)]
+
+
+def test_process_task_wins_over_watch_task(tmp_path, caplog):
+    proc, repo, logs = glue_dirs(tmp_path)
+    add_train_proc(proc, PID, repo)
+    run = add_run(logs, PID)
+    assert discover_runs(None, OTHER, proc) == [Run(run, TASK)]
+    (record,) = caplog.records
+    assert record.levelname == "WARNING"
+    assert TASK in record.getMessage() and OTHER in record.getMessage()
+
+
+def test_process_without_run_dir_skipped_with_warning(tmp_path, caplog):
+    proc, repo, logs = glue_dirs(tmp_path)
+    add_train_proc(proc, 3, repo)  # still starting: no tfevents yet
+    add_train_proc(proc, PID, repo)
+    run = add_run(logs, PID)
+    assert discover_runs(None, None, proc) == [Run(run, TASK)]
+    (record,) = caplog.records
+    assert record.levelname == "WARNING"
+    assert "pid 3" in record.getMessage() and str(logs) in record.getMessage()
+
+
+def test_processes_found_but_none_has_run_dir_raises(tmp_path):
+    proc, repo, logs = glue_dirs(tmp_path)
+    add_train_proc(proc, 3, repo)
+    add_train_proc(proc, PID, repo)
+    add_run(logs, 999)  # the fallback would pick this run; it must not run
+    with pytest.raises(RunDirNotFound) as e:
+        discover_runs(logs, TASK, proc)
+    assert "pid 3" in str(e.value) and f"pid {PID}" in str(e.value)
+
+
+def test_fallback_when_no_process(tmp_path):
+    proc, _, logs = glue_dirs(tmp_path)
+    add_proc(proc, 10, ["uv", "run", "train", TASK])  # wrapper only: no training process
+    add_run(logs, 999, "exp/2026-11-01_10-00-00")
+    latest = add_run(logs, 999, "exp/2026-11-09_12-00-00")
+    assert discover_runs(logs, OTHER, proc) == [Run(latest, OTHER)]
+
+
+def test_fallback_needs_watch_task(tmp_path):
+    proc, _, logs = glue_dirs(tmp_path)
+    run = add_run(logs, 999)
+    with pytest.raises(DiscoveryError) as e:
+        discover_runs(logs, None, proc)
+    assert not isinstance(e.value, RunDirNotFound)  # the run dir was found
+    assert str(run) in str(e.value) and "watch.task" in str(e.value)
+
+
+def test_no_process_and_no_log_root_raises(tmp_path):
+    proc, _, _ = glue_dirs(tmp_path)
+    with pytest.raises(DiscoveryError) as e:
+        discover_runs(None, TASK, proc)
+    assert not isinstance(e.value, RunDirNotFound)
+    assert "watch.log_root" in str(e.value)
+
+
+def test_fallback_error_propagates(tmp_path):
+    proc, _, _ = glue_dirs(tmp_path)
+    with pytest.raises(RunDirNotFound) as e:
+        discover_runs(tmp_path / "missing", TASK, proc)
+    assert isinstance(e.value, DiscoveryError)  # one type for the CLI to catch
+    assert str(tmp_path / "missing") in str(e.value)

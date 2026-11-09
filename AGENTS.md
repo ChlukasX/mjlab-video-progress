@@ -45,9 +45,17 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   `find_latest_run_dir(log_root)` is the directory fallback: among the `*/*` dirs named like
   mjlab's `YYYY-MM-DD_HH-MM-SS[_<run_name>]`, it returns the one with the highest name across
   all experiments (never reads mtime). Otherwise `RunDirNotFound` (not a dir, no run dir, newest
-  name in several experiments). Read-only. Not wired up yet: the planned glue uses it only when
-  no training process is found, takes the task from `watch.task` (error if unset), and lets a
-  found process's task win over `watch.task`. Without `watch.log_root` there is no fallback.
+  name in several experiments). Read-only.
+  `discover_runs(log_root, task, proc_root)` is the glue `watch` will call (once per start, to
+  be confirmed in roadmap item 8; there is no `watch` yet). It takes `watch.log_root` and
+  `watch.task` as arguments and does not import `config`. If training processes are found, it
+  returns a `Run(run_dir, task)` per process with a run dir, in pid order, using the process's
+  own task (a different `watch.task` is only logged as a warning). Processes without a run dir
+  are skipped with a warning; if none is left it raises `RunDirNotFound` and never falls back
+  (so a training that exits mid-lookup gives an error, not the fallback). Only when no process
+  is found does it return `find_latest_run_dir(watch.log_root)` with `watch.task`; either one
+  unset raises `DiscoveryError`, the base class of `RunDirNotFound`. Warnings go to stdlib
+  `logging`. Read-only.
 
 ## Hard rules (do not break)
 
@@ -99,19 +107,19 @@ Cases `discovery.find_latest_run_dir` does not handle (it picks by dir name only
 
 Also deferred: a config key to override the process match. Launchers the strict rule does not
 match (`python -m mjlab.scripts.train`, wrappers) are left to the `watch.log_root` directory
-fallback (`find_latest_run_dir`, not wired up yet). Add the key only when a real launcher is
-missed.
+fallback (`find_latest_run_dir`, used by `discover_runs` when no process is found). Add the key
+only when a real launcher is missed.
 
 ## Verification status (do not overclaim)
 
 Only the config loader (`config.py`), the train-command parser, the `/proc` process listing, the
-run-dir lookup and the directory fallback (`discovery.py`) are implemented. They are covered by
-unit tests only (`tests/test_config.py`, 44 passing, and `tests/test_discovery.py`, 47 passing
-plus 2 skipped on macOS; 91 passing in total, plus ruff clean). The skipped tests are the
-real-`/proc` tests (process listing smoke test, run-dir lookup via the real `cwd` link), which
-have not been run on Linux yet; otherwise discovery is tested against a fake `/proc` tree and
-fake logs trees only. The glue that chooses between process discovery and the fallback, the
-watch loop, render, bundle and sinks are not implemented yet. Nothing has been run against a
-real mjlab training run; the parser has only been checked against the shape of one captured
-uv-venv command line, and the run-dir lookup and the fallback only against the mjlab 1.6.0,
-rsl_rl 5.4.2 and tensorboard source.
+run-dir lookup, the directory fallback and the glue choosing between them (`discover_runs`, all
+in `discovery.py`) are implemented. They are covered by unit tests only (`tests/test_config.py`,
+44 passing, and `tests/test_discovery.py`, 56 passing plus 2 skipped on macOS; 100 passing in
+total, plus ruff clean). The skipped tests are the real-`/proc` tests (process listing smoke
+test, run-dir lookup via the real `cwd` link), which have not been run on Linux yet; otherwise
+discovery is tested against a fake `/proc` tree and fake logs trees only. `discover_runs` is not
+called by anything yet. The watch loop, render, bundle and sinks are not implemented yet.
+Nothing has been run against a real mjlab training run; the parser has only been checked
+against the shape of one captured uv-venv command line, and the run-dir lookup and the
+fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source.

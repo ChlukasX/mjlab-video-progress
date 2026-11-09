@@ -41,6 +41,14 @@ Contract for ``find_latest_run_dir(log_root)`` (the directory fallback):
   newest name in several experiments (it never guesses). Read-only: one glob and a stat per
   candidate.
 
+Contract for ``discover_runs(log_root, task, proc_root)`` (``watch.log_root``, ``watch.task``):
+
+- Training processes found: a ``Run(run_dir, task)`` per process with a run dir, in pid order,
+  with the process's own task (a different ``task`` is logged as a warning). The rest are skipped
+  with a warning; if none is left, raises ``RunDirNotFound`` with each pid's reason (no fallback).
+- No training process: ``Run(find_latest_run_dir(log_root), task)``; raises ``DiscoveryError``
+  (base of ``RunDirNotFound``) if ``log_root`` or ``task`` is ``None``.
+
 Unverified: only a uv-venv command line from a single live run was captured. A system-Python
 install, ``python -m mjlab.scripts.train``, other launchers, multi-GPU children and wrapper
 variations have not been observed. Processes that rewrite their own cmdline are not handled.
@@ -58,6 +66,7 @@ fake logs trees. The real-``/proc`` tests run on Linux only.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import socket
@@ -65,6 +74,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+_log = logging.getLogger(__name__)
 _PYTHON = re.compile(r"python(3(\.\d+)*)?")
 
 
@@ -120,7 +130,11 @@ def find_train_processes(
 _DEFAULT_LOG_ROOT = "logs/rsl_rl"  # mjlab 1.6.0 TrainConfig.log_root
 
 
-class RunDirNotFound(LookupError):
+class DiscoveryError(LookupError):
+    """Discovery found nothing to watch; the message says why."""
+
+
+class RunDirNotFound(DiscoveryError):
     """The run dir of a training process could not be located; the message says why."""
 
 
@@ -155,3 +169,36 @@ def find_latest_run_dir(log_root: Path) -> Path:
     if len(latest) > 1:
         raise RunDirNotFound(f"ambiguous, {len(latest)} run dirs named {newest}: {latest}")
     return latest[0]
+
+
+@dataclass(frozen=True)
+class Run:
+    run_dir: Path
+    task: str
+
+
+def discover_runs(
+    log_root: Path | None, task: str | None, proc_root: Path = Path("/proc")
+) -> list[Run]:
+    processes = find_train_processes(proc_root)
+    if not processes:
+        if log_root is None:
+            raise DiscoveryError("no training process found and watch.log_root is not set")
+        run_dir = find_latest_run_dir(log_root)
+        if task is None:
+            raise DiscoveryError(f"no training process found; set watch.task for {run_dir}")
+        return [Run(run_dir, task)]
+    runs, reasons = [], []
+    for p in processes:
+        try:
+            runs.append(Run(find_run_dir(p, proc_root), p.command.task))
+        except RunDirNotFound as e:
+            reasons.append(str(e))
+            continue
+        if task is not None and task != p.command.task:
+            _log.warning("pid %d trains %s, not watch.task %s", p.pid, p.command.task, task)
+    if not runs:
+        raise RunDirNotFound("no training process has a run dir: " + "; ".join(reasons))
+    for reason in reasons:
+        _log.warning("skipping training process, %s", reason)
+    return runs
