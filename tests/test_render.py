@@ -313,3 +313,11 @@ def test_play_command_that_cannot_start_raises_oserror(tmp_path, ckpt):
     cfg = RenderConfig(command=(str(tmp_path / "no-such-play"),), timeout_seconds=5)
     with pytest.raises(FileNotFoundError):
         render_checkpoint(cfg, "T", ckpt, tmp_path / "work")
+
+
+def test_stop_survives_a_play_that_already_exited_unreaped():
+    # macOS answers PermissionError when signalling a group that is only an unreaped zombie.
+    proc = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    time.sleep(0.5)  # exited, but nobody has waited on it yet
+    render._stop(proc)
+    assert proc.returncode == 0

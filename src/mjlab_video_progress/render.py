@@ -136,6 +136,6 @@ def _stop(proc: subprocess.Popen) -> None:
         except subprocess.TimeoutExpired:
             pass
         os.killpg(proc.pid, signal.SIGKILL)  # also reaps a child that outlived its parent
-    except ProcessLookupError:
-        pass  # the group is already gone
+    except (ProcessLookupError, PermissionError):
+        pass  # the group is gone, or macOS refuses to signal one that is only an unreaped zombie
     proc.wait()
