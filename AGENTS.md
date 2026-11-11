@@ -35,7 +35,10 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 - `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
   raises `ConfigError`). Rejects unknown keys, wrong types, non-positive ints and empty strings
   (except inside `render.extra_args`). Expands a leading `~` in paths, like a shell would for
-  `--log-root ~/x`, then resolves relative paths against the config file.
+  `--log-root ~/x`, then resolves relative paths against the config file. `[sinks.telegram]` is
+  optional (`Config.sinks.telegram` is `None` without it): `chat_id` (int, may be negative, or a
+  non-empty string), `token_file` (path) and `token_env` (default `TELEGRAM_BOT_TOKEN`); loading
+  never reads the token file or the environment. Other sink tables are rejected until built.
 - `discovery.py`: `parse_train_argv(argv)` turns a process argument list into
   `TrainCommand(task, log_root)`, or `None` if it is not a `python .../train <task>` command.
   Pure function, no filesystem or process access.
@@ -173,9 +176,9 @@ Implemented: the config loader (`config.py`); the train-command parser, the `/pr
 listing, the run-dir lookup, the directory fallback and the glue choosing between them
 (`discover_runs`, all in `discovery.py`); the checkpoint scan and the "due" choice (`scan.py`);
 the mp4 completeness check and running `play` (`render.py`); and the video store (`store.py`).
-They are covered by unit tests only (`tests/test_config.py`, 44 passing, `tests/test_discovery.py`,
+They are covered by unit tests only (`tests/test_config.py`, 64 passing, `tests/test_discovery.py`,
 56 passing plus 2 skipped on macOS, `tests/test_scan.py`, 20 passing, `tests/test_render.py`, 30
-passing and `tests/test_store.py`, 9 passing; 159 passing in total, plus ruff clean). The skipped
+passing and `tests/test_store.py`, 9 passing; 179 passing in total, plus ruff clean). The skipped
 tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via the real `cwd`
 link), which have not been run on Linux yet; otherwise discovery is tested against a fake `/proc`
 tree and fake logs trees only. `render_checkpoint` has never run a real `play`: its tests use a

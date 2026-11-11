@@ -15,7 +15,14 @@ Contract:
 - Relative paths resolve against the config file's directory; absolute paths are unchanged.
 - Loading never touches the filesystem under ``watch.log_root`` (hard rule 1).
 
-Tables: ``[watch]``, ``[render]`` and ``[output]``. Any other key is rejected.
+- ``[sinks.telegram]`` is optional; without it ``Config.sinks.telegram`` is ``None``. Its keys:
+  ``chat_id`` (required: an int, which may be negative, or a non-empty string, never a bool),
+  ``token_file`` (optional path, ``~`` expanded, relative paths resolved against the config file)
+  and ``token_env`` (non-empty string, default ``TELEGRAM_BOT_TOKEN``). Both token keys may be
+  set; the sink uses ``token_file`` if set, else the environment variable. Loading never reads
+  the token file or the environment. Any other sink table is rejected until that sink exists.
+
+Tables: ``[watch]``, ``[render]``, ``[output]`` and ``[sinks]``. Any other key is rejected.
 """
 
 from __future__ import annotations
@@ -51,10 +58,23 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class TelegramConfig:
+    chat_id: int | str
+    token_file: Path | None = None
+    token_env: str = "TELEGRAM_BOT_TOKEN"
+
+
+@dataclass(frozen=True)
+class SinksConfig:
+    telegram: TelegramConfig | None = None
+
+
+@dataclass(frozen=True)
 class Config:
     watch: WatchConfig
     render: RenderConfig
     output: OutputConfig
+    sinks: SinksConfig = SinksConfig()
 
 
 _REQUIRED = object()
@@ -86,6 +106,12 @@ def _strs(value, key, base):
     return tuple(value)
 
 
+def _chat_id(value, key, base):
+    if type(value) is int or (isinstance(value, str) and value):  # not bool; ids can be negative
+        return value
+    raise ConfigError(f"{key}: must be an integer or a non-empty string, got {value!r}")
+
+
 def _command(value, key, base):
     if not _strs(value, key, base) or "" in value:
         raise ConfigError(f"{key}: must be a non-empty list of non-empty strings")
@@ -109,11 +135,16 @@ _SPEC = {
         "cwd": (_path, None),
     },
     "output": {"dir": (_path, _REQUIRED)},
+    "sinks.telegram": {
+        "chat_id": (_chat_id, _REQUIRED),
+        "token_file": (_path, None),
+        "token_env": (_str, "TELEGRAM_BOT_TOKEN"),
+    },
 }
 
 
 def _table(data: dict, name: str, base: Path) -> dict:
-    raw = data.get(name, {})
+    raw = data.get(name.rpartition(".")[2], {})  # "sinks.telegram" is data["telegram"] here
     if not isinstance(raw, dict):
         raise ConfigError(f"{name}: must be a table")
     spec = _SPEC[name]
@@ -131,6 +162,17 @@ def _table(data: dict, name: str, base: Path) -> dict:
     return out
 
 
+def _sinks(raw, base: Path) -> SinksConfig:
+    if not isinstance(raw, dict):
+        raise ConfigError("sinks: must be a table")
+    for key in raw:
+        if key != "telegram":
+            raise ConfigError(f"unknown key sinks.{key}")
+    if "telegram" not in raw:
+        return SinksConfig()
+    return SinksConfig(telegram=TelegramConfig(**_table(raw, "sinks.telegram", base)))
+
+
 def load_config(path: Path) -> Config:
     path = Path(path)
     try:
@@ -141,11 +183,12 @@ def load_config(path: Path) -> Config:
     except ValueError as e:  # covers TOMLDecodeError and UnicodeDecodeError
         raise ConfigError(f"invalid TOML in {path}: {e}") from e
     for key in data:
-        if key not in _SPEC:
+        if key not in ("watch", "render", "output", "sinks"):
             raise ConfigError(f"unknown key {key} in {path}")
     base = path.absolute().parent
     return Config(
         watch=WatchConfig(**_table(data, "watch", base)),
         render=RenderConfig(**_table(data, "render", base)),
         output=OutputConfig(**_table(data, "output", base)),
+        sinks=_sinks(data["sinks"], base) if "sinks" in data else SinksConfig(),
     )

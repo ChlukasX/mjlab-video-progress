@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
@@ -230,3 +231,106 @@ def test_non_utf8_file_is_a_config_error(tmp_path):
 def test_empty_strings_rejected(tmp_path, old, new, key):
     with pytest.raises(ConfigError, match=key.replace(".", r"\.")):
         load_config(write(tmp_path, sub(old, new)))
+
+
+# --- [sinks.telegram] ---------------------------------------------------------------------------
+
+TELEGRAM = "\n[sinks.telegram]\nchat_id = 123\n"
+
+
+def load_telegram(tmp_path, text):
+    return load_config(write(tmp_path, MINIMAL + text)).sinks.telegram
+
+
+def test_no_sinks_table_means_no_telegram(tmp_path):
+    assert load_config(write(tmp_path)).sinks.telegram is None
+
+
+def test_telegram_defaults(tmp_path):
+    cfg = load_config(write(tmp_path, MINIMAL + TELEGRAM))
+    assert cfg.sinks.telegram.chat_id == 123
+    assert cfg.sinks.telegram.token_file is None
+    assert cfg.sinks.telegram.token_env == "TELEGRAM_BOT_TOKEN"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        cfg.sinks.telegram.chat_id = 1
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("-1001234567890", -1001234567890),  # supergroups and channels are negative
+        ('"@my_channel"', "@my_channel"),
+        ('"123456"', "123456"),  # a string stays a string
+    ],
+)
+def test_telegram_chat_id_forms(tmp_path, value, expected):
+    chat_id = load_telegram(tmp_path, f"\n[sinks.telegram]\nchat_id = {value}\n").chat_id
+    assert chat_id == expected and type(chat_id) is type(expected)
+
+
+@pytest.mark.parametrize("bad", ["true", '""', "1.5", "[1]"])
+def test_telegram_chat_id_wrong_type_names_key(tmp_path, bad):
+    with pytest.raises(ConfigError, match=r"sinks\.telegram\.chat_id"):
+        load_telegram(tmp_path, f"\n[sinks.telegram]\nchat_id = {bad}\n")
+
+
+def test_telegram_chat_id_is_required(tmp_path):
+    with pytest.raises(ConfigError, match=r"missing required key sinks\.telegram\.chat_id"):
+        load_telegram(tmp_path, "\n[sinks.telegram]\n")
+
+
+def test_telegram_token_env_is_loaded_and_checked(tmp_path):
+    assert load_telegram(tmp_path, TELEGRAM + 'token_env = "MY_BOT"\n').token_env == "MY_BOT"
+    for bad in ['""', "3"]:
+        with pytest.raises(ConfigError, match=r"sinks\.telegram\.token_env"):
+            load_telegram(tmp_path, TELEGRAM + f"token_env = {bad}\n")
+
+
+def test_telegram_token_file_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cases = [
+        ('"secrets/token"', tmp_path / "secrets/token"),  # relative: against the config file
+        ('"/abs/token"', Path("/abs/token")),
+        ('"~/.config/mvp/token"', tmp_path / "home/.config/mvp/token"),
+    ]
+    for value, expected in cases:
+        got = load_telegram(tmp_path, TELEGRAM + f"token_file = {value}\n").token_file
+        assert got == expected
+
+
+@pytest.mark.parametrize("bad", ['""', "3"])
+def test_telegram_token_file_wrong_type_names_key(tmp_path, bad):
+    with pytest.raises(ConfigError, match=r"sinks\.telegram\.token_file"):
+        load_telegram(tmp_path, TELEGRAM + f"token_file = {bad}\n")
+
+
+def test_telegram_accepts_both_token_sources(tmp_path):
+    got = load_telegram(tmp_path, TELEGRAM + 'token_file = "t"\ntoken_env = "X"\n')
+    assert (got.token_file, got.token_env) == (tmp_path / "t", "X")
+
+
+def test_loading_does_not_read_the_token_file_or_the_environment(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    got = load_telegram(tmp_path, TELEGRAM + 'token_file = "no/such/file"\n')
+    assert got.token_file == tmp_path / "no/such/file"
+    assert not (tmp_path / "no").exists()
+
+
+@pytest.mark.parametrize(
+    ("text", "key"),
+    [
+        (TELEGRAM + "bogus = 1\n", r"sinks\.telegram\.bogus"),
+        ("\n[sinks.docs]\nx = 1\n", r"sinks\.docs"),  # added together with that sink
+        ('\n[sinks.local]\ndest = "d"\n', r"sinks\.local"),
+    ],
+)
+def test_unknown_sink_keys_name_full_path(tmp_path, text, key):
+    with pytest.raises(ConfigError, match=key):
+        load_telegram(tmp_path, text)
+
+
+def test_sinks_that_is_not_a_table_is_rejected(tmp_path):
+    with pytest.raises(ConfigError, match=r"sinks: must be a table"):
+        load_config(write(tmp_path, "sinks = 5\n" + MINIMAL))
+    with pytest.raises(ConfigError, match=r"sinks\.telegram: must be a table"):
+        load_config(write(tmp_path, MINIMAL + "\n[sinks]\ntelegram = 5\n"))
