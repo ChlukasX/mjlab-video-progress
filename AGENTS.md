@@ -21,6 +21,7 @@ uv sync                                  # install incl. dev group (pytest, ruff
 uv run pytest                            # tests/ ; ffmpeg-dependent tests skip if ffmpeg is missing
 uv run ruff check .
 uv run ruff format --check .             # line length 100; rules E, F, I, B, UP
+uv run mjlab-video-progress watch --config PATH   # the tool itself (console script)
 ```
 
 Run all three of pytest, `ruff check` and `ruff format --check` before calling work done.
@@ -126,8 +127,15 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   the video and calls each sink with a `Delivery` for the stored video. A `RenderError` or
   `OSError` from the render or the store, and a `SinkError` or `OSError` from a sink, are logged as
   warnings (the other sinks still run); anything else, and a vanished run dir, propagates to
-  `watch`. It never logs a sink (its repr can hold the token). No CLI yet: nothing calls `start`
-  and `watch`.
+  `watch`. It never logs a sink (its repr can hold the token). `run_name(run)` is
+  `<experiment>/<run>`, used in log lines.
+- `cli.py`: `main(argv)` is the `mjlab-video-progress` console script (`[project.scripts]`), one
+  subcommand `watch --config PATH`. It logs INFO to stderr, loads the config, calls
+  `watch.start`, logs `watching N run(s): ...` and runs `watch.watch`. A `ConfigError` or
+  `DiscoveryError` prints `error: <message>` and returns 1; any other exception shows its
+  traceback. While the loop runs SIGTERM is turned into `SystemExit` (the old handler is restored
+  afterwards), and `KeyboardInterrupt` and `SystemExit` end the loop with exit code 0, after
+  `render_checkpoint` has stopped `play` and its child. argparse errors exit 2.
 
 ## Hard rules (do not break)
 
@@ -213,7 +221,9 @@ Watch, by design:
   deferred).
 - `watch` relies on its caller to turn SIGTERM into an exception (`SystemExit`): Python's default
   SIGTERM ends the process without running `render_checkpoint`'s `finally`, which would leave
-  `play` running. The CLI has to install that handler (not written yet).
+  `play` running. The CLI installs that handler; anything else that calls `watch` must too.
+  A SIGKILL of the watcher cannot be handled: a render in progress then leaves `play` running,
+  and under viser it never exits by itself, so someone has to stop it.
 
 Telegram, from the Bot API docs at core.telegram.org (`sendVideo`, multipart upload, answer
 format); nothing has been sent to the real API:
@@ -239,14 +249,16 @@ Telegram sink (`telegram.py`, `sinks.py`); and the startup and polling loop (`st
 `poll_run` in `watch.py`). They are covered by unit tests only (`tests/test_config.py`, 64
 passing, `tests/test_discovery.py`, 56 passing plus 2 skipped on macOS, `tests/test_scan.py`, 20
 passing, `tests/test_render.py`, 30 passing, `tests/test_store.py`, 9 passing,
-`tests/test_telegram.py`, 38 passing and `tests/test_watch.py`, 31 passing; 248 passing in total,
+`tests/test_telegram.py`, 38 passing, `tests/test_watch.py`, 31 passing and `tests/test_cli.py`,
+15 passing; 263 passing in total,
 plus ruff clean). The skipped tests are the real-`/proc` tests (process listing smoke test,
 run-dir lookup via the real `cwd` link), which have not been run on Linux yet; otherwise
 discovery is tested against a fake `/proc` tree and fake logs trees only. `render_checkpoint` has
 never run a real `play` (its tests use a fake script), `deliver_telegram` has never talked to
 Telegram (a fake transport and a loopback server), and `watch` has only run with a fake render
-and fake sinks. Nothing above is called by anything yet. The CLI (arguments, logging, the SIGTERM
-handler) and the `docs` sink are not implemented yet.
+and fake sinks. The CLI is covered with `start` and `watch` patched out, plus two tests that run
+the real CLI in a subprocess against a fake `play` and send it SIGTERM and SIGINT. The `docs` sink
+and the GPU load gate are not implemented yet.
 Nothing has been run against a real mjlab training run; the parser has only been checked
 against the shape of one captured uv-venv command line, and the run-dir lookup and the
 fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source. The scan's

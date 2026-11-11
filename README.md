@@ -21,9 +21,12 @@ beside the live training. The training run is never interrupted.
 ## Deferred
 
 `strip.png`, `eval.json`, `manifest.json` and any other sink content beyond the video (to be
-decided in a later version), `discord`, rendering a single checkpoint on demand, final-checkpoint detection, backfilling past
-checkpoints, a W&B checkpoint source, and macOS and Windows.
+decided in a later version), `discord`, rendering a single checkpoint on demand,
+final-checkpoint detection, backfilling past checkpoints, a W&B checkpoint source, and macOS
+and Windows.
 
 ## Status
 
-Early development. Nothing is implemented yet.
+Early development. `mjlab-video-progress watch --config PATH` runs end to end in the tests, against
+a fake `play` and a fake Telegram transport. It has not yet been run against a real mjlab training
+or the real Telegram API. The `docs` sink and the GPU load gate are not built.

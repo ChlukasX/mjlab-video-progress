@@ -62,7 +62,7 @@ from mjlab_video_progress.telegram import Post, deliver_telegram, read_token, ur
 log = logging.getLogger(__name__)
 
 
-def _name(run: Run) -> str:
+def run_name(run: Run) -> str:
     return f"{run.run_dir.parent.name}/{run.run_dir.name}"
 
 
@@ -81,7 +81,7 @@ def poll_run(
     if due is None:
         return
     state[run.run_dir] = due.iteration  # before the render: whatever fails, never tried again
-    name = _name(run)
+    name = run_name(run)
     work_dir = cfg.output.dir / ".work"
     try:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -140,5 +140,5 @@ def watch(
             try:
                 poll_run(cfg, run, session.state, session.sinks, render)
             except Exception:  # a bug costs this pass of this run, not the watcher
-                log.exception("pass for %s failed", _name(run))
+                log.exception("pass for %s failed", run_name(run))
         sleep(cfg.watch.poll_seconds)
