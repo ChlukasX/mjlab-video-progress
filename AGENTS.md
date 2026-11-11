@@ -86,6 +86,14 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   way and raises, with the log tail in the message. An `OSError` (missing checkpoint, `work_dir`
   not creatable, `play` not startable) propagates for `watch` to handle. Not called by anything
   yet.
+- `store.py`: where finished videos live. `store_video(video, output_dir, run_dir, iteration)`
+  copies the video to `<output_dir>/<experiment>/<run>/iter_<N>/video.mp4` (experiment and run are
+  the last two names of `run_dir`, which is never touched; `N` zero-padded to 6 digits) through a
+  temp file and `os.replace`, so the video is whole or absent and a repeat replaces it. The source
+  is left alone; an `OSError` propagates. `last_stored_iteration(output_dir, run_dir)` returns the
+  highest `N` whose dir holds a `video.mp4`, or `None` (including when the output dir does not
+  exist yet): `watch` seeds `last_rendered` from it after a restart. The `iter_<N>` dir is the
+  bundle; it holds only the video in v1.
 
 ## Hard rules (do not break)
 
@@ -161,19 +169,18 @@ of it run:
 
 ## Verification status (do not overclaim)
 
-Only the config loader (`config.py`), the train-command parser, the `/proc` process listing, the
-run-dir lookup, the directory fallback and the glue choosing between them (`discover_runs`, all
-in `discovery.py`), the checkpoint scan (`scan.py`) and the mp4 completeness check
-(`render.py`: the mp4 check and running `play` against a fake) are implemented. They are covered
-by unit tests only (`tests/test_config.py`, 44 passing, `tests/test_discovery.py`, 56 passing plus
-2 skipped on macOS, `tests/test_scan.py`, 20 passing, and `tests/test_render.py`, 29 passing; 149
-passing in total, plus ruff clean). The skipped tests are the real-`/proc` tests (process
-listing smoke test, run-dir lookup via the real `cwd` link), which have not been run on Linux yet;
-otherwise discovery is tested against a fake `/proc` tree and fake logs trees only.
-`discover_runs` is not
-called by anything yet, nor are `scan_checkpoints`, `next_due`, `video_complete` and
-`render_checkpoint`. The watch loop, bundle and sinks are not implemented yet. `render_checkpoint`
-has never run a real `play`: its tests use a fake script.
+Implemented: the config loader (`config.py`); the train-command parser, the `/proc` process
+listing, the run-dir lookup, the directory fallback and the glue choosing between them
+(`discover_runs`, all in `discovery.py`); the checkpoint scan and the "due" choice (`scan.py`);
+the mp4 completeness check and running `play` (`render.py`); and the video store (`store.py`).
+They are covered by unit tests only (`tests/test_config.py`, 44 passing, `tests/test_discovery.py`,
+56 passing plus 2 skipped on macOS, `tests/test_scan.py`, 20 passing, `tests/test_render.py`, 30
+passing and `tests/test_store.py`, 9 passing; 159 passing in total, plus ruff clean). The skipped
+tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via the real `cwd`
+link), which have not been run on Linux yet; otherwise discovery is tested against a fake `/proc`
+tree and fake logs trees only. `render_checkpoint` has never run a real `play`: its tests use a
+fake script. Nothing above is called by anything yet. The watch loop and sinks are not
+implemented yet.
 Nothing has been run against a real mjlab training run; the parser has only been checked
 against the shape of one captured uv-venv command line, and the run-dir lookup and the
 fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source. The scan's
