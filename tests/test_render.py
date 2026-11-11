@@ -9,10 +9,10 @@ import subprocess
 import sys
 import textwrap
 import time
-import zipfile
 from pathlib import Path
 
 import pytest
+from helpers import snapshot, zip_bytes
 
 from mjlab_video_progress import render
 from mjlab_video_progress.config import RenderConfig
@@ -157,8 +157,7 @@ def ckpt(tmp_path):
     logs = tmp_path / "logs"
     logs.mkdir()
     path = logs / "model_150.pt"
-    with zipfile.ZipFile(path, "w") as z:
-        z.writestr("archive/data.pkl", b"x" * 100)
+    path.write_bytes(zip_bytes())
     return Checkpoint(150, path)
 
 
@@ -217,17 +216,13 @@ def test_argv_and_cwd(tmp_path, ckpt):
 
 def test_play_gets_a_copy_and_the_checkpoint_dir_is_untouched(tmp_path, ckpt):
     run_dir = ckpt.path.parent
-    before = (ckpt.path.read_bytes(), ckpt.path.stat().st_mtime_ns, sorted(run_dir.iterdir()))
+    before = snapshot(run_dir)
     work = tmp_path / "work"
     render_checkpoint(render_cfg(fake_play(tmp_path, FINISH_AND_HANG)), "T", ckpt, work)
     argv = json.loads((work / "argv.json").read_text())["argv"]
     used = Path(argv[argv.index("--checkpoint-file") + 1])
     assert used != ckpt.path and used.read_bytes() == ckpt.path.read_bytes()
-    assert (
-        ckpt.path.read_bytes(),
-        ckpt.path.stat().st_mtime_ns,
-        sorted(run_dir.iterdir()),
-    ) == before
+    assert snapshot(run_dir) == before
 
 
 def test_timeout_stops_play_and_raises(tmp_path, ckpt):

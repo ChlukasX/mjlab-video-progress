@@ -2,35 +2,18 @@
 
 from __future__ import annotations
 
-import io
-import zipfile
 from pathlib import Path
 
 import pytest
+from helpers import snapshot, zip_bytes
 
 from mjlab_video_progress.scan import Checkpoint, next_due, scan_checkpoints
-
-
-def zip_bytes():
-    """A complete zip, like the file torch.save writes (the end record comes last)."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("archive/data.pkl", b"x" * 5000)
-    return buf.getvalue()
 
 
 def add_ckpt(run_dir, name, data=None):
     path = run_dir / name
     path.write_bytes(zip_bytes() if data is None else data)
     return path
-
-
-def snapshot(root):
-    """Bytes (files) and st_mtime_ns of every path under root, root included."""
-    return {
-        p: (p.read_bytes() if p.is_file() else None, p.stat().st_mtime_ns)
-        for p in [root, *root.rglob("*")]
-    }
 
 
 def test_empty_run_dir_returns_empty_list(tmp_path):

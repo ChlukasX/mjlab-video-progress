@@ -6,6 +6,7 @@ import dataclasses
 from pathlib import Path
 
 import pytest
+from helpers import snapshot
 
 from mjlab_video_progress.config import ConfigError, load_config
 
@@ -116,15 +117,9 @@ def test_load_does_not_touch_log_root(tmp_path):
     ckpt.parent.mkdir(parents=True)
     ckpt.write_bytes(b"x")
 
-    def snapshot():
-        return [
-            (p, p.stat().st_mtime_ns, p.read_bytes() if p.is_file() else None)
-            for p in sorted(tmp_path.glob("logs/**/*"))
-        ]
-
-    before = snapshot()
+    before = snapshot(tmp_path / "logs")
     load_config(write(tmp_path, sub("every = 500", 'every = 500\nlog_root = "logs"')))
-    assert snapshot() == before
+    assert snapshot(tmp_path / "logs") == before
 
 
 def test_missing_file_and_syntax_error(tmp_path):

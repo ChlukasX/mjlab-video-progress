@@ -8,6 +8,7 @@ import os
 import socket
 
 import pytest
+from helpers import snapshot
 
 from mjlab_video_progress.discovery import (
     DiscoveryError,
@@ -244,14 +245,6 @@ def test_two_runs_for_same_pid_are_ambiguous(tmp_path):
     with pytest.raises(RunDirNotFound) as e:
         find_run_dir(process, proc)
     assert str(old) in str(e.value) and str(new) in str(e.value)
-
-
-def snapshot(root):
-    """Bytes (files) and st_mtime_ns of every path under root, root included."""
-    return {
-        p: (p.read_bytes() if p.is_file() else None, p.stat().st_mtime_ns)
-        for p in [root, *root.rglob("*")]
-    }
 
 
 def test_lookup_leaves_logs_tree_identical(tmp_path):
