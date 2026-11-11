@@ -7,27 +7,28 @@ import shutil
 import struct
 import subprocess
 import sys
-import textwrap
 import time
 from pathlib import Path
 
 import pytest
-from helpers import snapshot, zip_bytes
+from helpers import (
+    FTYP,
+    MDAT,
+    MOOV,
+    VIDEO,
+    VIDEO_NAME,
+    assert_silent,
+    box,
+    fake_play,
+    snapshot,
+    zip_bytes,
+)
 
 from mjlab_video_progress import render
 from mjlab_video_progress.config import RenderConfig
 from mjlab_video_progress.exceptions import RenderError
 from mjlab_video_progress.render import render_checkpoint, video_complete
 from mjlab_video_progress.scan import Checkpoint
-
-
-def box(kind, payload):
-    return struct.pack(">I4s", 8 + len(payload), kind) + payload
-
-
-FTYP = box(b"ftyp", b"isom0000")
-MDAT = box(b"mdat", b"x" * 50)
-MOOV = box(b"moov", b"y" * 20)
 
 
 @pytest.fixture(params=[(), ("-movflags", "+faststart")], ids=["moov-last", "moov-first"])
@@ -95,56 +96,10 @@ def test_missing_file_or_directory(tmp_path):
 
 # --- render_checkpoint, against a fake `play` script -------------------------------------------
 
-VIDEO = FTYP + MDAT + MOOV
-VIDEO_NAME = "videos/play/rl-video-step-0.mp4"
-
-# The fake play never exits on its own, like the real one under viser: it keeps a heartbeat file
-# growing, and so does a grandchild process (the real `uv run play` has a python child).
-PRELUDE = """
-import json, signal, subprocess, sys, time
-from pathlib import Path
-
-VIDEO = @VIDEO@
-BEAT = "import sys, time\\nwhile True:\\n open(sys.argv[1], 'ab').write(b'x')\\n time.sleep(0.05)"
-args = sys.argv[1:]
-work = Path(args[args.index("--checkpoint-file") + 1]).parent
-(work / "argv.json").write_text(json.dumps({"argv": args, "cwd": str(Path.cwd().resolve())}))
-
-def start_beats():
-    (work / "play.beat").touch()
-    (work / "child.beat").touch()
-    subprocess.Popen([sys.executable, "-c", BEAT, str(work / "child.beat")])
-
-def beat():
-    while True:
-        with open(work / "play.beat", "ab") as f:
-            f.write(b"x")
-        time.sleep(0.05)
-
-def write_video():
-    path = work / "@VIDEO_NAME@"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(VIDEO)
-"""
-
-
-def fake_play(tmp_path, body):
-    script = tmp_path / "fake_play.py"
-    prelude = PRELUDE.replace("@VIDEO@", repr(VIDEO)).replace("@VIDEO_NAME@", VIDEO_NAME)
-    script.write_text(prelude + textwrap.dedent(body))
-    return script
-
 
 def render_cfg(script, **overrides):
     fields = {"command": (sys.executable, str(script), "prefix"), "timeout_seconds": 30}
     return RenderConfig(**{**fields, **overrides})
-
-
-def assert_silent(path):
-    """The process writing `path` is gone: the file stops growing."""
-    size = path.stat().st_size
-    time.sleep(0.5)
-    assert path.stat().st_size == size, f"{path.name} is still being written"
 
 
 @pytest.fixture(autouse=True)
