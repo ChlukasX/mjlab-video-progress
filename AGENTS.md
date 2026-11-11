@@ -28,8 +28,9 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 ## Code map (`src/mjlab_video_progress/`)
 
 - `exceptions.py`: every custom exception, in one place: `ConfigError`, and `DiscoveryError`
-  with its subclass `RunDirNotFound`. `config` and `discovery` import them from here, so the
-  old import paths (`config.ConfigError`, `discovery.RunDirNotFound`) still work.
+  with its subclass `RunDirNotFound`, and `RenderError`. `config` and `discovery` import them
+  from here, so the old import paths (`config.ConfigError`, `discovery.RunDirNotFound`) still
+  work.
 - `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
   raises `ConfigError`). Rejects unknown keys, wrong types, non-positive ints and empty strings
   (except inside `render.extra_args`). Expands a leading `~` in paths, like a shell would for
@@ -73,17 +74,27 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   file exactly and a `moov` and an `mdat` box are present (both `moov` last and `+faststart`
   layouts). A missing file, a directory, a cut or still-being-written file is False. It reads
   box headers only; it replaces a plain `ffprobe` exit code, which accepted many cuts inside the
-  trailing `moov`. The render itself (running `play`) is not implemented yet.
+  trailing `moov`.
+  `render_checkpoint(cfg, task, checkpoint, work_dir)` returns `work_dir/videos/play/
+  rl-video-step-0.mp4` or raises `RenderError`. It copies the checkpoint into `work_dir` (a copy
+  that is not a complete zip raises before `play` starts), removes any leftover video, runs
+  `[*command, task, --checkpoint-file <copy>, --video True, --video-length, --num-envs,
+  *extra_args]` in its own session with output in `play.log`, and polls. As soon as
+  `video_complete` is true it stops `play` (SIGINT to its process group, SIGKILL after
+  `KILL_GRACE_SECONDS`) and returns; on timeout or an exit without a video it stops it the same
+  way and raises, with the log tail in the message. An `OSError` (missing checkpoint, `work_dir`
+  not creatable, `play` not startable) propagates for `watch` to handle. Not called by anything
+  yet.
 
 ## Hard rules (do not break)
 
 1. **Read-only on training output.** The tool never starts, stops or signals a training
-   process, and never writes, moves or deletes under `logs/` or `wandb/`. The one exception is
-   files mjlab's own `play` subprocess creates (`<checkpoint dir>/videos/play/`). A test asserts
-   a **scan** leaves the logs tree byte- and mtime-identical. The tool writes only: the output
+   process, and never writes, moves or deletes under `logs/` or `wandb/`. There is no exception:
+   `play` runs on a copy of the checkpoint in the output dir, so its `videos/play/` lands there.
+   A test asserts a **scan** leaves the logs tree byte- and mtime-identical. The tool writes only: the output
    dir, run-log files named in the `docs` sink, and an optional `image_dir` / `dest`. Never run
-   git from the tool. The tool may kill its own render subprocess on timeout, and never
-   anything else.
+   git from the tool. The tool may signal the process group of its own render subprocess
+   (once the video is done, or on timeout), and never anything else.
 
 ## Conventions
 
@@ -136,9 +147,14 @@ of it run:
   must stop `play` itself once the video is complete, with the timeout as the hard cap.
 - mjlab turns off tyro's flag conversion (`TYRO_FLAGS`), so the flag is `--video True`.
 - The video is always `<checkpoint dir>/videos/play/rl-video-step-0.mp4`, overwritten by each
-  render, so a failed render can leave the previous video behind.
+  render, so a failed render can leave the previous video behind. Hence the render runs `play`
+  on a copy in `work_dir` and removes any leftover video first.
 - `uv run play` starts the real python as a child; signalling only the wrapper would leave it
   running. The render signals the process group it created, never anything else.
+- The stop sequence (SIGINT to the process group, SIGKILL after 10 s) is tested only with a fake
+  `play` and a grandchild process. Whether it stops a real `uv run play`, its viser server and
+  its GPU job cleanly is untested. A group member that is a zombie nobody reaps (a container
+  without an init process) would make the stop wait out the full grace.
 - Each render starts a viser web server on a port. A clash with a concurrent viewer, and what it
   exposes on the host, are untested.
 
@@ -147,14 +163,16 @@ of it run:
 Only the config loader (`config.py`), the train-command parser, the `/proc` process listing, the
 run-dir lookup, the directory fallback and the glue choosing between them (`discover_runs`, all
 in `discovery.py`), the checkpoint scan (`scan.py`) and the mp4 completeness check
-(`render.py`) are implemented. They are covered by unit tests only (`tests/test_config.py`, 44
-passing, `tests/test_discovery.py`, 56 passing plus 2 skipped on macOS, `tests/test_scan.py`, 20
-passing, and `tests/test_render.py`, 15 passing; 135 passing in total, plus ruff clean). The
-skipped tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via the
-real `cwd` link), which have not been run on Linux yet; otherwise
-discovery is tested against a fake `/proc` tree and fake logs trees only. `discover_runs` is not
-called by anything yet, nor are `scan_checkpoints`, `next_due` and `video_complete`. The watch
-loop, running `play`, bundle and sinks are not implemented yet.
+(`render.py`: the mp4 check and running `play` against a fake) are implemented. They are covered
+by unit tests only (`tests/test_config.py`, 44 passing, `tests/test_discovery.py`, 56 passing plus
+2 skipped on macOS, `tests/test_scan.py`, 20 passing, and `tests/test_render.py`, 29 passing; 149
+passing in total, plus ruff clean). The skipped tests are the real-`/proc` tests (process
+listing smoke test, run-dir lookup via the real `cwd` link), which have not been run on Linux yet;
+otherwise discovery is tested against a fake `/proc` tree and fake logs trees only.
+`discover_runs` is not
+called by anything yet, nor are `scan_checkpoints`, `next_due`, `video_complete` and
+`render_checkpoint`. The watch loop, bundle and sinks are not implemented yet. `render_checkpoint`
+has never run a real `play`: its tests use a fake script.
 Nothing has been run against a real mjlab training run; the parser has only been checked
 against the shape of one captured uv-venv command line, and the run-dir lookup and the
 fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source. The scan's

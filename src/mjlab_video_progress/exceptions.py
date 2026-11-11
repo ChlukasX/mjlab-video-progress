@@ -7,6 +7,7 @@ Contract:
   ``discovery``. Catching ``DiscoveryError`` catches both.
 - The modules that raise them import them from here, so ``config.ConfigError`` and
   ``discovery.DiscoveryError`` / ``discovery.RunDirNotFound`` are the same classes.
+- ``RenderError``: raised by ``render.render_checkpoint`` when ``play`` produced no video.
 """
 
 from __future__ import annotations
@@ -22,3 +23,7 @@ class DiscoveryError(LookupError):
 
 class RunDirNotFound(DiscoveryError):
     """The run dir of a training process could not be located; the message says why."""
+
+
+class RenderError(Exception):
+    """A render did not produce a finished video; the message says why."""
