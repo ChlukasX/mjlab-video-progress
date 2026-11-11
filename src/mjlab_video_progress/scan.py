@@ -1,4 +1,4 @@
-"""Scan: list the finished checkpoints in a run dir.
+"""Scan: list the finished checkpoints in a run dir and pick the one due for rendering.
 
 Contract:
 
@@ -12,6 +12,14 @@ Contract:
 - A missing or unreadable ``run_dir`` raises ``OSError`` (``FileNotFoundError`` if missing).
 - Read-only on the run dir (hard rule 1): lists the directory and reads the tail of each
   matching file; never writes or changes mtimes.
+- ``next_due(checkpoints, last_rendered, every)`` is pure. It returns the newest checkpoint
+  (by iteration, whatever the input order) with ``iteration >= last_rendered + every``, or
+  ``None``. ``last_rendered=None`` (nothing rendered yet) counts as 0, so the first render waits
+  for a checkpoint at iteration ``every`` or later. Several due: only the newest is returned, the
+  rest are skipped. The threshold is relative to ``last_rendered``, not a multiple of ``every``,
+  so an ``every`` that is not a multiple of mjlab's ``save_interval`` still fires (the effective
+  interval is ``every`` rounded up to a multiple of ``save_interval``). ``every`` is not
+  validated; config guarantees a positive int.
 """
 
 from __future__ import annotations
@@ -38,3 +46,14 @@ def scan_checkpoints(run_dir: Path) -> list[Checkpoint]:
         if m and path.is_file() and zipfile.is_zipfile(path):
             found.append(Checkpoint(int(m[1]), path))
     return sorted(found, key=lambda c: c.iteration)
+
+
+def next_due(
+    checkpoints: list[Checkpoint], last_rendered: int | None, every: int
+) -> Checkpoint | None:
+    threshold = (last_rendered or 0) + every
+    return max(
+        (c for c in checkpoints if c.iteration >= threshold),
+        key=lambda c: c.iteration,
+        default=None,
+    )

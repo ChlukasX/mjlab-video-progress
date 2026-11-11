@@ -62,8 +62,13 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 - `scan.py`: `scan_checkpoints(run_dir)` returns `Checkpoint(iteration, path)` for every regular
   file named exactly `model_<int>.pt` in the run dir, sorted by iteration. A file without a valid
   zip end record (mjlab's `torch.save` writes it last, in place) is still being written and is
-  skipped. A missing run dir raises `FileNotFoundError`. Read-only. Which checkpoint is due is
-  not decided here.
+  skipped. A missing run dir raises `FileNotFoundError`. Read-only.
+  `next_due(checkpoints, last_rendered, every)` is a pure function returning the newest
+  checkpoint with `iteration >= last_rendered + every`, or `None`. `last_rendered=None` counts as
+  0, so the first render waits for iteration `every`. Several due: only the newest. The threshold
+  is relative to `last_rendered`, so an `every` that is not a multiple of mjlab's `save_interval`
+  still fires. A failed render, retries and seeding `last_rendered` after a restart are not
+  handled here (left to `watch`).
 
 ## Hard rules (do not break)
 
@@ -124,12 +129,12 @@ Only the config loader (`config.py`), the train-command parser, the `/proc` proc
 run-dir lookup, the directory fallback and the glue choosing between them (`discover_runs`, all
 in `discovery.py`), and the checkpoint scan (`scan.py`) are implemented. They are covered by unit
 tests only (`tests/test_config.py`, 44 passing, `tests/test_discovery.py`, 56 passing plus 2
-skipped on macOS, and `tests/test_scan.py`, 9 passing; 109 passing in total, plus ruff clean).
+skipped on macOS, and `tests/test_scan.py`, 20 passing; 120 passing in total, plus ruff clean).
 The skipped tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via
 the real `cwd` link), which have not been run on Linux yet; otherwise
 discovery is tested against a fake `/proc` tree and fake logs trees only. `discover_runs` is not
-called by anything yet, nor is `scan_checkpoints`. The "due" logic, watch loop, render, bundle
-and sinks are not implemented yet.
+called by anything yet, nor are `scan_checkpoints` and `next_due`. The watch loop, render,
+bundle and sinks are not implemented yet.
 Nothing has been run against a real mjlab training run; the parser has only been checked
 against the shape of one captured uv-venv command line, and the run-dir lookup and the
 fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source. The scan's

@@ -1,13 +1,14 @@
-"""Contract tests for scan: scan_checkpoints."""
+"""Contract tests for scan: scan_checkpoints and next_due."""
 
 from __future__ import annotations
 
 import io
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from mjlab_video_progress.scan import Checkpoint, scan_checkpoints
+from mjlab_video_progress.scan import Checkpoint, next_due, scan_checkpoints
 
 
 def zip_bytes():
@@ -81,3 +82,51 @@ def test_scan_leaves_logs_tree_identical(tmp_path):
 def test_missing_run_dir_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         scan_checkpoints(tmp_path / "gone")
+
+
+def ckpts(*iterations):
+    return [Checkpoint(it, Path(f"model_{it}.pt")) for it in iterations]
+
+
+def test_next_due_no_checkpoints():
+    assert next_due([], None, 100) is None
+    assert next_due([], 100, 100) is None
+
+
+@pytest.mark.parametrize(
+    "last, newest, expected",
+    [
+        (None, 50, None),  # first render waits for iteration `every`; None counts as 0
+        (None, 100, 100),
+        (0, 50, None),  # 0 is a real value, not "unset"
+        (0, 100, 100),
+        (100, 150, None),
+        (100, 200, 200),  # exactly last_rendered + every is due
+    ],
+)
+def test_next_due_threshold_is_last_rendered_plus_every(last, newest, expected):
+    due = next_due(ckpts(*range(0, newest + 1, 50)), last, 100)
+    assert (due.iteration if due else None) == expected
+
+
+def test_next_due_several_due_returns_only_the_newest():
+    cs = ckpts(*range(0, 501, 100))
+    assert next_due(cs, None, 100) == cs[-1]
+    assert next_due(cs, 100, 100) == cs[-1]
+
+
+def test_next_due_every_not_a_multiple_of_save_interval_still_fires():
+    cs = ckpts(0, 150, 300)  # save_interval 150, every 100
+    assert next_due(cs[:2], None, 100) == cs[1]
+    assert next_due(cs, 150, 100) == cs[2]
+
+
+def test_next_due_nothing_newer_than_last_rendered():
+    cs = ckpts(0, 50, 100)
+    assert next_due(cs, 100, 50) is None  # the one just rendered is never due again
+    assert next_due(cs, 500, 100) is None
+
+
+def test_next_due_ignores_input_order():
+    cs = ckpts(500, 0, 300, 100)
+    assert next_due(cs, 0, 100) == cs[0]
