@@ -110,6 +110,15 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   redacted from every message and the original exception is not chained, since the URL holds the
   token. `post` is the injected transport; `urlopen_post` is the `urllib` default and returns an
   HTTP error status instead of raising. One attempt, no retry. Not called by anything yet.
+- `watch.py`: `poll_run(cfg, run, state, sinks, render=render_checkpoint)` is one pass for one run.
+  `state` maps `run_dir` to the last iteration handled and is updated in place. When
+  `next_due` picks a checkpoint it records the iteration **first**, so a failure afterwards never
+  causes a retry; it removes `<output.dir>/.work`, renders into it (left behind afterwards, for
+  `play.log`), stores the video and calls each sink with a `Delivery` for the stored video. A
+  `RenderError` or `OSError` from the render or the store, and a `SinkError` or `OSError` from a
+  sink, are logged as warnings (the other sinks still run); anything else, and a vanished run
+  dir, propagates for the loop to handle. It never logs a sink (its repr can hold the token). The
+  loop, startup and CLI are not written yet.
 
 ## Hard rules (do not break)
 
@@ -183,6 +192,14 @@ of it run:
 - Each render starts a viser web server on a port. A clash with a concurrent viewer, and what it
   exposes on the host, are untested.
 
+Watch, by design (`poll_run`; the loop and CLI are not written yet):
+
+- A failed render, store or delivery is never retried: the iteration is marked handled before the
+  render. A transient failure loses that iteration's video (and Telegram message); the next
+  attempt is the next due checkpoint. A restart retries it, because seeding uses stored videos
+  only, and a sink that failed is not retried either (no per-sink delivery state exists).
+- The GPU load gate from the README is not built; it would be a check just before the render.
+
 Telegram, from the Bot API docs at core.telegram.org (`sendVideo`, multipart upload, answer
 format); nothing has been sent to the real API:
 
@@ -202,18 +219,18 @@ format); nothing has been sent to the real API:
 Implemented: the config loader (`config.py`); the train-command parser, the `/proc` process
 listing, the run-dir lookup, the directory fallback and the glue choosing between them
 (`discover_runs`, all in `discovery.py`); the checkpoint scan and the "due" choice (`scan.py`);
-the mp4 completeness check and running `play` (`render.py`); the video store (`store.py`); and
-the Telegram sink (`telegram.py`, `sinks.py`). They are covered by unit tests only
-(`tests/test_config.py`, 64 passing, `tests/test_discovery.py`, 56 passing plus 2 skipped on
-macOS, `tests/test_scan.py`, 20 passing, `tests/test_render.py`, 30 passing, `tests/test_store.py`,
-9 passing and `tests/test_telegram.py`, 38 passing; 217 passing in total, plus ruff clean).
-The skipped tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via
-the real `cwd` link), which have not been run on Linux yet; otherwise discovery is tested against
-a fake `/proc`
-tree and fake logs trees only. `render_checkpoint` has never run a real `play`: its tests use a
-fake script, and `deliver_telegram` has never talked to Telegram: its tests use a fake transport
-and a loopback server. Nothing above is called by anything yet. The watch loop and the `docs`
-sink are not implemented yet.
+the mp4 completeness check and running `play` (`render.py`); the video store (`store.py`); the
+Telegram sink (`telegram.py`, `sinks.py`); and one pass of the watch loop (`poll_run` in
+`watch.py`). They are covered by unit tests only (`tests/test_config.py`, 64 passing,
+`tests/test_discovery.py`, 56 passing plus 2 skipped on macOS, `tests/test_scan.py`, 20 passing,
+`tests/test_render.py`, 30 passing, `tests/test_store.py`, 9 passing, `tests/test_telegram.py`, 38
+passing and `tests/test_watch.py`, 16 passing; 233 passing in total, plus ruff clean). The skipped
+tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via the real `cwd`
+link), which have not been run on Linux yet; otherwise discovery is tested against a fake `/proc`
+tree and fake logs trees only. `render_checkpoint` has never run a real `play` (its tests use a
+fake script), `deliver_telegram` has never talked to Telegram (a fake transport and a loopback
+server), and `poll_run` has only run with a fake render and fake sinks. Nothing above is called
+by anything yet. Startup, the polling loop, the CLI and the `docs` sink are not implemented yet.
 Nothing has been run against a real mjlab training run; the parser has only been checked
 against the shape of one captured uv-venv command line, and the run-dir lookup and the
 fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source. The scan's
