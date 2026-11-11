@@ -6,9 +6,10 @@ Guidance for AI coding agents working in this repo. Humans: see `README.md`.
 
 `mjlab-video-progress` is a `watch` loop that renders new local
 [mjlab](https://github.com/mujocolab/mjlab) checkpoints (every X iterations) via the configured
-`play` command into a **bundle** (`video.mp4`, `strip.png`, `eval.json`, `manifest.json`) and
-delivers it to **sinks** (`local`, `docs`, `telegram`; others are deferred). It must never
-interrupt the training run. Linux is the supported platform.
+`play` command into a **bundle** (v1: just `video.mp4`; `strip.png`, `eval.json` and
+`manifest.json` are deferred to a later version) and delivers it to **sinks** (`local`, `docs`,
+`telegram`; others are deferred). The sinks deliver the video only. It must never interrupt the
+training run. Linux is the supported platform.
 
 Goal: low impact on the training run. A render uses `--num-envs 1` and a hard timeout by
 default. The actual cost has not yet been measured.
