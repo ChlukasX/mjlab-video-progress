@@ -29,9 +29,9 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 ## Code map (`src/mjlab_video_progress/`)
 
 - `exceptions.py`: every custom exception, in one place: `ConfigError`, and `DiscoveryError`
-  with its subclass `RunDirNotFound`, and `RenderError`. `config` and `discovery` import them
-  from here, so the old import paths (`config.ConfigError`, `discovery.RunDirNotFound`) still
-  work.
+  with its subclass `RunDirNotFound`, `RenderError` and `SinkError`. `config` and `discovery`
+  import them from here, so the old import paths (`config.ConfigError`,
+  `discovery.RunDirNotFound`) still work.
 - `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
   raises `ConfigError`). Rejects unknown keys, wrong types, non-positive ints and empty strings
   (except inside `render.extra_args`). Expands a leading `~` in paths, like a shell would for
@@ -97,16 +97,29 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   highest `N` whose dir holds a `video.mp4`, or `None` (including when the output dir does not
   exist yet): `watch` seeds `last_rendered` from it after a restart. The `iter_<N>` dir is the
   bundle; it holds only the video in v1.
+- `sinks.py`: `Delivery(video, task, run_dir, iteration)`, what every sink is handed. A sink
+  delivers the video only and raises `SinkError` when it cannot.
+- `telegram.py`: the Telegram sink. `read_token(cfg, environ=None)` returns the bot token from
+  `token_file` if set (a regular file, not readable by group or others, non-empty; otherwise
+  `ConfigError` with a `chmod 600` hint), else from the environment variable `token_env`; it
+  never puts the token in a message. `deliver_telegram(cfg, token, delivery, post)` sends one
+  multipart `sendVideo` request (`chat_id`, `caption` = task, `experiment/run`, iteration, cut to
+  1024 characters, `supports_streaming`, the video) and raises `SinkError` for an `ok: false`
+  answer (code, description, `retry_after`), an answer that is not a JSON object with `ok`, a
+  transport `OSError`, or a video over 50,000,000 bytes (no request is sent). The token is
+  redacted from every message and the original exception is not chained, since the URL holds the
+  token. `post` is the injected transport; `urlopen_post` is the `urllib` default and returns an
+  HTTP error status instead of raising. One attempt, no retry. Not called by anything yet.
 
 ## Hard rules (do not break)
 
 1. **Read-only on training output.** The tool never starts, stops or signals a training
    process, and never writes, moves or deletes under `logs/` or `wandb/`. There is no exception:
    `play` runs on a copy of the checkpoint in the output dir, so its `videos/play/` lands there.
-   A test asserts a **scan** leaves the logs tree byte- and mtime-identical. The tool writes only: the output
-   dir, run-log files named in the `docs` sink, and an optional `image_dir` / `dest`. Never run
-   git from the tool. The tool may signal the process group of its own render subprocess
-   (once the video is done, or on timeout), and never anything else.
+   A test asserts a **scan** leaves the logs tree byte- and mtime-identical. The tool writes
+   only: the output dir, run-log files named in the `docs` sink, and an optional `image_dir` /
+   `dest`. Never run git from the tool. The tool may signal the process group of its own render
+   subprocess (once the video is done, or on timeout), and never anything else.
 
 ## Conventions
 
@@ -170,20 +183,37 @@ of it run:
 - Each render starts a viser web server on a port. A clash with a concurrent viewer, and what it
   exposes on the host, are untested.
 
+Telegram, from the Bot API docs at core.telegram.org (`sendVideo`, multipart upload, answer
+format); nothing has been sent to the real API:
+
+- The request shape, the 50 MB limit (the docs say MB, read as 10^6 bytes, so the code refuses
+  above 50,000,000 bytes) and the answer format were read from the docs, not tried with a real
+  bot. `parameters.retry_after` was not found in the part of the docs read; the code uses it only
+  if present.
+- One attempt with a 60 s timeout, no retry or backoff: a 429 is only reported. `urllib` follows
+  the proxy environment variables.
+- The caption is cut at 1024 code points; Telegram counts characters its own way, which only
+  matters for non-BMP characters in a task name.
+- `watch` must remove the token environment variable from its own environment before it spawns
+  `play`, so `play` and mjlab code never inherit it (not built yet).
+
 ## Verification status (do not overclaim)
 
 Implemented: the config loader (`config.py`); the train-command parser, the `/proc` process
 listing, the run-dir lookup, the directory fallback and the glue choosing between them
 (`discover_runs`, all in `discovery.py`); the checkpoint scan and the "due" choice (`scan.py`);
-the mp4 completeness check and running `play` (`render.py`); and the video store (`store.py`).
-They are covered by unit tests only (`tests/test_config.py`, 64 passing, `tests/test_discovery.py`,
-56 passing plus 2 skipped on macOS, `tests/test_scan.py`, 20 passing, `tests/test_render.py`, 30
-passing and `tests/test_store.py`, 9 passing; 179 passing in total, plus ruff clean). The skipped
-tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via the real `cwd`
-link), which have not been run on Linux yet; otherwise discovery is tested against a fake `/proc`
+the mp4 completeness check and running `play` (`render.py`); the video store (`store.py`); and
+the Telegram sink (`telegram.py`, `sinks.py`). They are covered by unit tests only
+(`tests/test_config.py`, 64 passing, `tests/test_discovery.py`, 56 passing plus 2 skipped on
+macOS, `tests/test_scan.py`, 20 passing, `tests/test_render.py`, 30 passing, `tests/test_store.py`,
+9 passing and `tests/test_telegram.py`, 38 passing; 217 passing in total, plus ruff clean).
+The skipped tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via
+the real `cwd` link), which have not been run on Linux yet; otherwise discovery is tested against
+a fake `/proc`
 tree and fake logs trees only. `render_checkpoint` has never run a real `play`: its tests use a
-fake script. Nothing above is called by anything yet. The watch loop and sinks are not
-implemented yet.
+fake script, and `deliver_telegram` has never talked to Telegram: its tests use a fake transport
+and a loopback server. Nothing above is called by anything yet. The watch loop and the `docs`
+sink are not implemented yet.
 Nothing has been run against a real mjlab training run; the parser has only been checked
 against the shape of one captured uv-venv command line, and the run-dir lookup and the
 fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source. The scan's

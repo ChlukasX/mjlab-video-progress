@@ -8,6 +8,8 @@ Contract:
 - The modules that raise them import them from here, so ``config.ConfigError`` and
   ``discovery.DiscoveryError`` / ``discovery.RunDirNotFound`` are the same classes.
 - ``RenderError``: raised by ``render.render_checkpoint`` when ``play`` produced no video.
+- ``SinkError``: raised by a sink (``telegram.deliver_telegram``) when it could not deliver. Its
+  message says why and never contains a secret.
 """
 
 from __future__ import annotations
@@ -27,3 +29,7 @@ class RunDirNotFound(DiscoveryError):
 
 class RenderError(Exception):
     """A render did not produce a finished video; the message says why."""
+
+
+class SinkError(Exception):
+    """A sink could not deliver a video; the message says why and never contains a secret."""
