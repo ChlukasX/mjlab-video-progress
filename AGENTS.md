@@ -69,6 +69,11 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   is relative to `last_rendered`, so an `every` that is not a multiple of mjlab's `save_interval`
   still fires. A failed render, retries and seeding `last_rendered` after a restart are not
   handled here (left to `watch`).
+- `render.py`: `video_complete(path)` is True only for a whole mp4: the top-level boxes tile the
+  file exactly and a `moov` and an `mdat` box are present (both `moov` last and `+faststart`
+  layouts). A missing file, a directory, a cut or still-being-written file is False. It reads
+  box headers only; it replaces a plain `ffprobe` exit code, which accepted many cuts inside the
+  trailing `moov`. The render itself (running `play`) is not implemented yet.
 
 ## Hard rules (do not break)
 
@@ -123,20 +128,37 @@ match (`python -m mjlab.scripts.train`, wrappers) are left to the `watch.log_roo
 fallback (`find_latest_run_dir`, used by `discover_runs` when no process is found). Add the key
 only when a real launcher is missed.
 
+Render, from reading mjlab 1.6.0 source (`play.py`, `video_recorder.py`, `viewer/viser`); none
+of it run:
+
+- `play --video` never exits by itself: after the `video_length` frames it keeps running the
+  viewer, and headless that is `ViserPlayViewer`, whose `is_running()` is always True. The render
+  must stop `play` itself once the video is complete, with the timeout as the hard cap.
+- mjlab turns off tyro's flag conversion (`TYRO_FLAGS`), so the flag is `--video True`.
+- The video is always `<checkpoint dir>/videos/play/rl-video-step-0.mp4`, overwritten by each
+  render, so a failed render can leave the previous video behind.
+- `uv run play` starts the real python as a child; signalling only the wrapper would leave it
+  running. The render signals the process group it created, never anything else.
+- Each render starts a viser web server on a port. A clash with a concurrent viewer, and what it
+  exposes on the host, are untested.
+
 ## Verification status (do not overclaim)
 
 Only the config loader (`config.py`), the train-command parser, the `/proc` process listing, the
 run-dir lookup, the directory fallback and the glue choosing between them (`discover_runs`, all
-in `discovery.py`), and the checkpoint scan (`scan.py`) are implemented. They are covered by unit
-tests only (`tests/test_config.py`, 44 passing, `tests/test_discovery.py`, 56 passing plus 2
-skipped on macOS, and `tests/test_scan.py`, 20 passing; 120 passing in total, plus ruff clean).
-The skipped tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via
-the real `cwd` link), which have not been run on Linux yet; otherwise
+in `discovery.py`), the checkpoint scan (`scan.py`) and the mp4 completeness check
+(`render.py`) are implemented. They are covered by unit tests only (`tests/test_config.py`, 44
+passing, `tests/test_discovery.py`, 56 passing plus 2 skipped on macOS, `tests/test_scan.py`, 20
+passing, and `tests/test_render.py`, 15 passing; 135 passing in total, plus ruff clean). The
+skipped tests are the real-`/proc` tests (process listing smoke test, run-dir lookup via the
+real `cwd` link), which have not been run on Linux yet; otherwise
 discovery is tested against a fake `/proc` tree and fake logs trees only. `discover_runs` is not
-called by anything yet, nor are `scan_checkpoints` and `next_due`. The watch loop, render,
-bundle and sinks are not implemented yet.
+called by anything yet, nor are `scan_checkpoints`, `next_due` and `video_complete`. The watch
+loop, running `play`, bundle and sinks are not implemented yet.
 Nothing has been run against a real mjlab training run; the parser has only been checked
 against the shape of one captured uv-venv command line, and the run-dir lookup and the
 fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source. The scan's
 completeness check (zip end record) was checked only by truncating one `torch.save` file on
-macOS, not against a checkpoint being written by a live run on Linux.
+macOS, not against a checkpoint being written by a live run on Linux. `video_complete` was
+checked only against mp4s made by ffmpeg itself (both layouts, every cut); the file mediapy
+writes inside `play` has not been looked at.
