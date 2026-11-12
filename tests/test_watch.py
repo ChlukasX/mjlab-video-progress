@@ -109,7 +109,7 @@ def test_due_checkpoint_is_rendered_stored_and_delivered(cfg, run):
             cfg.render,
             "Task-X",
             Checkpoint(150, run.run_dir / "model_150.pt"),
-            cfg.output.dir / ".work",
+            cfg.output.dir / RUN_NAME / ".work",
         )
     ]
     video = stored_video(cfg, 150)
@@ -191,13 +191,27 @@ def test_a_bug_in_a_sink_propagates_after_the_iteration_is_marked_handled(cfg, r
 
 def test_work_dir_is_emptied_before_the_render_and_left_afterwards(cfg, run):
     add_checkpoints(run, 0, 100)
-    work = cfg.output.dir / ".work"
+    work = cfg.output.dir / RUN_NAME / ".work"
     work.mkdir(parents=True)
     (work / "old.log").write_text("from the last render")
     seen = []
     poll_run(cfg, run, {}, [], FakeRender(on_call=lambda w: seen.append((w / "old.log").exists())))
     assert seen == [False]
     assert (work / "videos/play/rl-video-step-0.mp4").exists()
+
+
+def test_work_dir_is_per_run_so_another_runs_play_log_survives(cfg, run, tmp_path):
+    other = Run(run_dir=tmp_path / "logs/rsl_rl/exp/2026-11-10_08-00-00", task="Task-Y")
+    other.run_dir.mkdir(parents=True)
+    add_checkpoints(other, 100)
+    add_checkpoints(run, 100)
+    render = FakeRender()
+    poll_run(cfg, other, {}, [], render)
+    other_work = render.calls[0][3]
+    (other_work / "play.log").write_text("other run")
+    poll_run(cfg, run, {}, [], render)
+    assert render.calls[1][3] != other_work
+    assert (other_work / "play.log").read_text() == "other run"
 
 
 def test_run_dir_that_vanished_propagates_without_rendering(cfg, run):

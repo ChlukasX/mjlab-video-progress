@@ -18,6 +18,8 @@ Contract:
   output dir or the run's dir does not exist yet. A dir without ``video.mp4``, files, other
   names and other runs are ignored. ``watch`` uses it to seed ``last_rendered`` after a restart.
   Read-only.
+- ``run_output_dir(output_dir, run_dir)`` is ``<output_dir>/<experiment>/<run>``; ``watch``
+  keeps the run's work dir there too (``.work`` does not match ``iter_<N>``).
 - Writes only under ``output_dir``.
 """
 
@@ -31,12 +33,13 @@ from pathlib import Path
 _ITER = re.compile(r"iter_([0-9]+)")
 
 
-def _run_out(output_dir: Path, run_dir: Path) -> Path:
+def run_output_dir(output_dir: Path, run_dir: Path) -> Path:
+    """``<output_dir>/<experiment>/<run>``: the run's bundles, and its work dir."""
     return Path(output_dir) / run_dir.parent.name / run_dir.name
 
 
 def store_video(video: Path, output_dir: Path, run_dir: Path, iteration: int) -> Path:
-    dest = _run_out(output_dir, run_dir) / f"iter_{iteration:06d}" / "video.mp4"
+    dest = run_output_dir(output_dir, run_dir) / f"iter_{iteration:06d}" / "video.mp4"
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name("video.mp4.tmp")  # one render at a time, so a fixed name is enough
     try:
@@ -49,7 +52,7 @@ def store_video(video: Path, output_dir: Path, run_dir: Path, iteration: int) ->
 
 def last_stored_iteration(output_dir: Path, run_dir: Path) -> int | None:
     try:
-        entries = list(_run_out(output_dir, run_dir).iterdir())
+        entries = list(run_output_dir(output_dir, run_dir).iterdir())
     except FileNotFoundError:
         return None
     found = [

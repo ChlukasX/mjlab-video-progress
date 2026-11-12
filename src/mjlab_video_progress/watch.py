@@ -26,10 +26,11 @@ Contract:
   1. it records that iteration in ``state`` **before** rendering, so whatever fails afterwards the
      same checkpoint is never tried again (no retry storm; the next attempt is the next due
      checkpoint);
-  2. it removes ``<cfg.output.dir>/.work`` and calls
+  2. it removes the run's work dir ``<cfg.output.dir>/<experiment>/<run>/.work`` and calls
      ``render(cfg.render, run.task, checkpoint, <that work dir>)``, which recreates it; the work
-     dir is left behind afterwards, so the last ``play.log`` can be read after a success or a
-     failure;
+     dir is left behind afterwards, so the run's last ``play.log`` can be read after a success or
+     a failure. One work dir per run, so watchers sharing an output dir never touch each other's;
+     two watchers on the same run still would;
   3. it stores the video with ``store_video(video, cfg.output.dir, run.run_dir, iteration)``;
   4. it calls each sink with ``Delivery(stored video, run.task, run.run_dir, iteration)``.
   A ``RenderError`` or ``OSError`` from steps 2-3 is logged as a warning (run, iteration, the
@@ -56,7 +57,7 @@ from mjlab_video_progress.exceptions import RenderError, SinkError
 from mjlab_video_progress.render import render_checkpoint
 from mjlab_video_progress.scan import Checkpoint, next_due, scan_checkpoints
 from mjlab_video_progress.sinks import Delivery
-from mjlab_video_progress.store import last_stored_iteration, store_video
+from mjlab_video_progress.store import last_stored_iteration, run_output_dir, store_video
 from mjlab_video_progress.telegram import Post, deliver_telegram, read_token, urlopen_post
 
 log = logging.getLogger(__name__)
@@ -82,7 +83,7 @@ def poll_run(
         return
     state[run.run_dir] = due.iteration  # before the render: whatever fails, never tried again
     name = run_name(run)
-    work_dir = cfg.output.dir / ".work"
+    work_dir = run_output_dir(cfg.output.dir, run.run_dir) / ".work"  # per run: watchers can share
     try:
         shutil.rmtree(work_dir, ignore_errors=True)
         video = render(cfg.render, run.task, due, work_dir)

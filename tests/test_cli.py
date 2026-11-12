@@ -214,7 +214,7 @@ dir = {json.dumps(str(tmp_path / "out"))}
     with open(stderr_log, "wb") as err:
         cmd = [sys.executable, str(driver), str(config), str(proc_root)]
         proc = subprocess.Popen(cmd, stderr=err, start_new_session=True)
-    work = tmp_path / "out/.work"
+    work = tmp_path / "out/exp/2026-11-09_12-00-00/.work"
     try:
         wait_until_play_runs(proc, work, stderr_log)
         proc.send_signal(sig)
