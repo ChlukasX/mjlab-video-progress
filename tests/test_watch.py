@@ -167,10 +167,18 @@ def test_store_failure_is_logged_and_nothing_is_delivered(cfg, run, caplog, monk
 def test_sink_failure_is_logged_and_the_other_sinks_still_run(cfg, run, caplog, error):
     add_checkpoints(run, 0, 100)
     failing, working, state = FakeSink(raises=error), FakeSink(), {}
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         poll_run(cfg, run, state, [failing, working], FakeRender())
     assert len(working.deliveries) == 1 and stored_video(cfg, 100).exists()
     assert str(error) in caplog.text and state == {run.run_dir: 100}
+    assert "delivered" in caplog.text and "1 of 2 sink(s)" in caplog.text
+
+
+def test_success_is_logged(cfg, run, caplog):
+    add_checkpoints(run, 0, 100)
+    with caplog.at_level(logging.INFO):
+        poll_run(cfg, run, {}, [FakeSink()], FakeRender())
+    assert f"delivered {RUN_NAME} iteration 100 to 1 of 1 sink(s)" in caplog.text
 
 
 def test_a_bug_in_a_sink_propagates_after_the_iteration_is_marked_handled(cfg, run):

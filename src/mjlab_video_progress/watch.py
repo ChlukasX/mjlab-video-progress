@@ -92,11 +92,22 @@ def poll_run(
         return
     log.info("stored %s iteration %d at %s", name, due.iteration, stored)
     delivery = Delivery(stored, run.task, run.run_dir, due.iteration)
+    delivered = 0
     for sink in sinks:
         try:
             sink(delivery)
         except (SinkError, OSError) as e:  # never log the sink itself: its repr can hold a token
             log.warning("delivery of %s iteration %d failed: %s", name, due.iteration, e)
+        else:
+            delivered += 1
+    if delivered:
+        log.info(
+            "delivered %s iteration %d to %d of %d sink(s)",
+            name,
+            due.iteration,
+            delivered,
+            len(sinks),
+        )
 
 
 @dataclass(frozen=True)
