@@ -228,7 +228,7 @@ Watch, by design:
   render. A transient failure loses that iteration's video (and Telegram message); the next
   attempt is the next due checkpoint. A restart retries it, because seeding uses stored videos
   only, and a sink that failed is not retried either (no per-sink delivery state exists).
-- The GPU load gate from the README is not built; it would be a check just before the render.
+- The GPU load gate (see `TODO.md`) is not built; it would be a check just before the render.
 - Runs are discovered once at start. If the training process starts later, or ends, `watch` does
   not notice; it polls the run dirs it found until it is stopped (final-checkpoint detection is
   deferred).

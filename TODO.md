@@ -15,6 +15,8 @@
 
 ## Planned
 
+- [ ] `chat-id` command: print the chat ids the bot has seen (`getUpdates`, token read like
+  `watch` does), replacing the Python one-liner in README step 4.3.
 - [x] `test` command: send a test message to every configured sink (token, chat id, network).
 - [ ] Pick up each new `train` process as it appears, instead of discovering runs once at start.
 
@@ -31,4 +33,4 @@
 ## Cleanup
 
 - [x] `AGENTS.md`/`CLAUDE.md`: drop the stale "roadmap item 8; there is no `watch` yet" note.
-- [ ] Simplify the `README.md` file, installation, and setup steps specifically. 
+- [x] Simplify the `README.md` file, installation, and setup steps specifically.
