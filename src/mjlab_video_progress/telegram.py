@@ -21,6 +21,11 @@ Contract:
 - ``send_text(cfg, token, text, post=urlopen_post)`` sends ``text`` to the chat with
   ``sendMessage`` (form-urlencoded ``chat_id`` and ``text``, plain text). Used by the ``test``
   command. Answers, errors and redaction as for ``deliver_telegram``.
+- ``get_chats(token, post=urlopen_post)`` calls ``getUpdates`` and returns ``{chat id: name}``
+  for every chat in the pending updates (any update field holding a ``chat``: messages, channel
+  posts, the bot being added to a group). The name is the title, username or first name, or
+  ``""``. Telegram keeps updates for about a day, so an old message may be gone. Used by the
+  ``chat-id`` command; errors as above, and a ``result`` that is not a list is a ``SinkError``.
 - ``SinkError`` covers: an answer with ``ok`` false (the message has the error code, the
   description and, if given, ``parameters.retry_after``), an answer that is not a JSON object
   with an ``ok`` field, and a transport that raises ``OSError`` (``URLError``, timeouts,
@@ -144,8 +149,22 @@ def send_text(cfg: TelegramConfig, token: str, text: str, post: Post = urlopen_p
     _call(token, "sendMessage", "application/x-www-form-urlencoded", body, post)
 
 
-def _call(token: str, method: str, content_type: str, body: bytes, post: Post) -> None:
-    """One Bot API request; ``None`` when Telegram answers ``ok``, else ``SinkError``."""
+def get_chats(token: str, post: Post = urlopen_post) -> dict[int | str, str]:
+    result = _call(token, "getUpdates", "application/x-www-form-urlencoded", b"", post)
+    if not isinstance(result, list):
+        raise SinkError("unexpected getUpdates result from Telegram")
+    chats: dict[int | str, str] = {}
+    for update in result:
+        for value in update.values() if isinstance(update, dict) else ():
+            chat = value.get("chat") if isinstance(value, dict) else None
+            if isinstance(chat, dict) and "id" in chat:
+                name = chat.get("title") or chat.get("username") or chat.get("first_name") or ""
+                chats[chat["id"]] = name
+    return chats
+
+
+def _call(token: str, method: str, content_type: str, body: bytes, post: Post) -> object:
+    """One Bot API request; its ``result`` when Telegram answers ``ok``, else ``SinkError``."""
 
     def redact(text: str) -> str:
         return text.replace(token, "<token>") if token else text
@@ -165,7 +184,7 @@ def _call(token: str, method: str, content_type: str, body: bytes, post: Post) -
     if not isinstance(data, dict) or "ok" not in data:
         raise SinkError(f"unexpected response from Telegram (HTTP {status})")
     if data["ok"] is True:
-        return
+        return data.get("result")
     reason = f"Telegram error {data.get('error_code', status)}: {data.get('description')}"
     params = data.get("parameters")
     if isinstance(params, dict) and "retry_after" in params:

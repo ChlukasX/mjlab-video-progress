@@ -1,4 +1,5 @@
-"""Contract tests for telegram: read_token, deliver_telegram, send_text and urlopen_post.
+"""Contract tests for telegram: read_token, deliver_telegram, send_text,
+get_chats and urlopen_post.
 No real network."""
 
 from __future__ import annotations
@@ -20,7 +21,13 @@ from mjlab_video_progress import telegram
 from mjlab_video_progress.config import TelegramConfig
 from mjlab_video_progress.exceptions import ConfigError, SinkError
 from mjlab_video_progress.sinks import Delivery
-from mjlab_video_progress.telegram import deliver_telegram, read_token, send_text, urlopen_post
+from mjlab_video_progress.telegram import (
+    deliver_telegram,
+    get_chats,
+    read_token,
+    send_text,
+    urlopen_post,
+)
 
 TOKEN = "123456:SECRET-token_value"
 VIDEO = b"\x00\xffvideo\r\nbytes\x80"
@@ -253,6 +260,48 @@ def test_send_text_failure_is_a_sink_error_without_the_token(post):
     with pytest.raises(SinkError) as e:
         send_text(TelegramConfig(chat_id=1), TOKEN, "hi", post)
     assert TOKEN not in str(e.value)
+
+
+# --- get_chats ----------------------------------------------------------------------------------
+
+
+def updates(*items):
+    return json.dumps({"ok": True, "result": list(items)}).encode()
+
+
+def test_get_chats_collects_every_chat_from_get_updates():
+    post = FakePost(
+        body=updates(
+            {
+                "update_id": 1,
+                "message": {"chat": {"id": 7, "first_name": "Ann", "username": "ann"}},
+            },
+            {"update_id": 2, "message": {"chat": {"id": 7, "username": "ann"}}},
+            {"update_id": 3, "my_chat_member": {"chat": {"id": -100, "title": "Lab"}}},
+            {"update_id": 4, "channel_post": {"chat": {"id": -200, "title": "Runs"}}},
+            {"update_id": 5, "message": {"chat": {"id": 8}}},
+            {"update_id": 6, "poll": {"id": "x"}},
+        )
+    )
+    assert get_chats(TOKEN, post) == {7: "ann", -100: "Lab", -200: "Runs", 8: ""}
+    [(url, _, body)] = post.calls
+    assert url == f"https://api.telegram.org/bot{TOKEN}/getUpdates" and body == b""
+
+
+def test_get_chats_with_no_updates_is_empty():
+    assert get_chats(TOKEN, FakePost(body=updates())) == {}
+
+
+@pytest.mark.parametrize(
+    "post",
+    [
+        FakePost(body=json.dumps({"ok": True, "result": {}}).encode()),
+        FakePost(409, api_error(409, "Conflict: can't use getUpdates while webhook is active")),
+    ],
+)
+def test_get_chats_failure_is_a_sink_error(post):
+    with pytest.raises(SinkError):
+        get_chats(TOKEN, post)
 
 
 # --- urlopen_post, against a loopback server -----------------------------------------------------
