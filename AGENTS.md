@@ -55,9 +55,8 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   mjlab's `YYYY-MM-DD_HH-MM-SS[_<run_name>]`, it returns the one with the highest name across
   all experiments (never reads mtime). Otherwise `RunDirNotFound` (not a dir, no run dir, newest
   name in several experiments). Read-only.
-  `discover_runs(log_root, task, proc_root)` is the glue `watch` will call (once per start, to
-  be confirmed in roadmap item 8; there is no `watch` yet). It takes `watch.log_root` and
-  `watch.task` as arguments and does not import `config`. If training processes are found, it
+  `discover_runs(log_root, task, proc_root)` is the glue `watch.start` calls, once per start.
+  It takes `watch.log_root` and `watch.task` as arguments and does not import `config`. If training processes are found, it
   returns a `Run(run_dir, task)` per process with a run dir, in pid order, using the process's
   own task (a different `watch.task` is only logged as a warning). Processes without a run dir
   are skipped with a warning; if none is left it raises `RunDirNotFound` and never falls back
@@ -96,8 +95,9 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   temp file and `os.replace`, so the video is whole or absent and a repeat replaces it. The source
   is left alone; an `OSError` propagates. `last_stored_iteration(output_dir, run_dir)` returns the
   highest `N` whose dir holds a `video.mp4`, or `None` (including when the output dir does not
-  exist yet): `watch` seeds `last_rendered` from it after a restart. The `iter_<N>` dir is the
-  bundle; it holds only the video in v1.
+  exist yet): `watch` seeds `last_rendered` from it after a restart.
+  `run_output_dir(output_dir, run_dir)` is `<output_dir>/<experiment>/<run>`; `watch` puts the
+  run's `.work` dir there. The `iter_<N>` dir is the bundle; it holds only the video in v1.
 - `sinks.py`: `Delivery(video, task, run_dir, iteration)`, what every sink is handed. A sink
   delivers the video only and raises `SinkError` when it cannot.
 - `telegram.py`: the Telegram sink. `read_token(cfg, environ=None)` returns the bot token from
@@ -123,7 +123,7 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   `poll_run(cfg, run, state, sinks, render=render_checkpoint)` is one pass for one run. `state`
   maps `run_dir` to the last iteration handled and is updated in place. When `next_due` picks a
   checkpoint it records the iteration **first**, so a failure afterwards never causes a retry; it
-  removes `<output.dir>/.work`, renders into it (left behind afterwards, for `play.log`), stores
+  removes the run's work dir `<output.dir>/<experiment>/<run>/.work`, renders into it (left behind afterwards, for `play.log`), stores
   the video and calls each sink with a `Delivery` for the stored video. A `RenderError` or
   `OSError` from the render or the store, and a `SinkError` or `OSError` from a sink, are logged as
   warnings (the other sinks still run); anything else, and a vanished run dir, propagates to
@@ -190,8 +190,8 @@ match (`python -m mjlab.scripts.train`, wrappers) are left to the `watch.log_roo
 fallback (`find_latest_run_dir`, used by `discover_runs` when no process is found). Add the key
 only when a real launcher is missed.
 
-Render, from reading mjlab 1.6.0 source (`play.py`, `video_recorder.py`, `viewer/viser`); none
-of it run:
+Render, from reading mjlab 1.6.0 source (`play.py`, `video_recorder.py`, `viewer/viser`), and
+from a few real renders on 2026-11-12 (see Verification status):
 
 - `play --video` never exits by itself: after the `video_length` frames it keeps running the
   viewer, and headless that is `ViserPlayViewer`, whose `is_running()` is always True. The render
@@ -202,12 +202,20 @@ of it run:
   on a copy in `work_dir` and removes any leftover video first.
 - `uv run play` starts the real python as a child; signalling only the wrapper would leave it
   running. The render signals the process group it created, never anything else.
-- The stop sequence (SIGINT to the process group, SIGKILL after 10 s) is tested only with a fake
-  `play` and a grandchild process. Whether it stops a real `uv run play`, its viser server and
-  its GPU job cleanly is untested. A group member that is a zombie nobody reaps (a container
-  without an init process) would make the stop wait out the full grace.
-- Each render starts a viser web server on a port. A clash with a concurrent viewer, and what it
-  exposes on the host, are untested.
+- The stop sequence (SIGINT to the process group, SIGKILL after 10 s) is tested with a fake
+  `play` and a grandchild process. With a real `uv run --frozen --no-sync play` the last kept
+  `play.log` ends with `Ctrl+C received. Shutting down viewer...` / `(viser) Server stopped`, and
+  no `play` was left running after four renders. Only the last render's `play.log` survives and
+  a SIGKILL escalation is not logged, so whether earlier renders needed the SIGKILL is unknown.
+  A group member that is a zombie nobody reaps (a container without an init process) would make
+  the stop wait out the full grace.
+- Each render starts a viewer: `play --viewer auto` picks `native` only with `DISPLAY` or
+  `WAYLAND_DISPLAY` set, else viser (the real watcher ran headless and got viser). viser binds
+  `0.0.0.0:8080` and moves to the next port when one is taken (viser `_infra.py`, read, not run
+  with two renders), so concurrent renders do not clash. While a render runs its viewer is
+  reachable from other hosts; mjlab has no option to bind it to localhost.
+- The work dir is per run (`<output.dir>/<experiment>/<run>/.work`), so watchers sharing an
+  `output.dir` never touch each other's. Two watchers on the same run would still clash.
 
 Watch, by design:
 
@@ -226,18 +234,19 @@ Watch, by design:
   and under viser it never exits by itself, so someone has to stop it.
 
 Telegram, from the Bot API docs at core.telegram.org (`sendVideo`, multipart upload, answer
-format); nothing has been sent to the real API:
+format), and four real `sendVideo` deliveries on 2026-11-12:
 
-- The request shape, the 50 MB limit (the docs say MB, read as 10^6 bytes, so the code refuses
-  above 50,000,000 bytes) and the answer format were read from the docs, not tried with a real
-  bot. `parameters.retry_after` was not found in the part of the docs read; the code uses it only
-  if present.
+- The request shape works with a real bot (the videos arrived). The 50 MB limit (the docs say
+  MB, read as 10^6 bytes, so the code refuses above 50,000,000 bytes) and the error answers were
+  read from the docs, not tried. `parameters.retry_after` was not found in the part of the docs
+  read; the code uses it only if present.
 - One attempt with a 60 s timeout, no retry or backoff: a 429 is only reported. `urllib` follows
   the proxy environment variables.
 - The caption is cut at 1024 code points; Telegram counts characters its own way, which only
   matters for non-BMP characters in a task name.
-- `watch` must remove the token environment variable from its own environment before it spawns
-  `play`, so `play` and mjlab code never inherit it (not built yet).
+- `watch.start` removes the token environment variable from its own environment before any
+  `play` is spawned, so `play` and mjlab code never inherit it. A token from `token_file` is
+  never in the environment.
 
 ## Verification status (do not overclaim)
 
@@ -246,23 +255,24 @@ listing, the run-dir lookup, the directory fallback and the glue choosing betwee
 (`discover_runs`, all in `discovery.py`); the checkpoint scan and the "due" choice (`scan.py`);
 the mp4 completeness check and running `play` (`render.py`); the video store (`store.py`); the
 Telegram sink (`telegram.py`, `sinks.py`); and the startup and polling loop (`start`, `watch` and
-`poll_run` in `watch.py`). They are covered by unit tests only (`tests/test_config.py`, 64
-passing, `tests/test_discovery.py`, 56 passing plus 2 skipped on macOS, `tests/test_scan.py`, 20
-passing, `tests/test_render.py`, 30 passing, `tests/test_store.py`, 9 passing,
-`tests/test_telegram.py`, 38 passing, `tests/test_watch.py`, 31 passing and `tests/test_cli.py`,
-15 passing; 263 passing in total,
-plus ruff clean). The skipped tests are the real-`/proc` tests (process listing smoke test,
-run-dir lookup via the real `cwd` link), which have not been run on Linux yet; otherwise
-discovery is tested against a fake `/proc` tree and fake logs trees only. `render_checkpoint` has
-never run a real `play` (its tests use a fake script), `deliver_telegram` has never talked to
-Telegram (a fake transport and a loopback server), and `watch` has only run with a fake render
-and fake sinks. The CLI is covered with `start` and `watch` patched out, plus two tests that run
-the real CLI in a subprocess against a fake `play` and send it SIGTERM and SIGINT. The `docs` sink
-and the GPU load gate are not implemented yet.
-Nothing has been run against a real mjlab training run; the parser has only been checked
-against the shape of one captured uv-venv command line, and the run-dir lookup and the
-fallback only against the mjlab 1.6.0, rsl_rl 5.4.2 and tensorboard source. The scan's
-completeness check (zip end record) was checked only by truncating one `torch.save` file on
-macOS, not against a checkpoint being written by a live run on Linux. `video_complete` was
-checked only against mp4s made by ffmpeg itself (both layouts, every cut); the file mediapy
-writes inside `play` has not been looked at.
+`poll_run` in `watch.py`). Unit tests (`tests/test_config.py` 64, `tests/test_discovery.py` 58,
+`tests/test_scan.py` 20, `tests/test_render.py` 30, `tests/test_store.py` 9,
+`tests/test_telegram.py` 38, `tests/test_watch.py` 33, `tests/test_cli.py` 15; 267 passing on
+Linux, none skipped, plus ruff clean). The two real-`/proc` tests (process listing smoke test,
+run-dir lookup via the real `cwd` link) skip on macOS and pass on Linux. The CLI tests patch out
+`start` and `watch`, plus two run the real CLI in a subprocess against a fake `play` and send it
+SIGTERM and SIGINT. The `docs` sink and the GPU load gate are not implemented yet.
+
+Real runs (Linux, 2026-11-12): `watch` ran from the CLI against two live mjlab trainings
+(one resumed from a checkpoint, each with its own config), with
+`command = ["uv", "run", "--frozen", "--no-sync", "play"]` and the Telegram sink. It rendered
+iterations 27300, 27800, 28300 (first run) and 24450 (second run); each video was stored and
+arrived in Telegram, with no warning in the logs. `find_train_processes` and `find_run_dir`
+found the live resumed run through the real `/proc` (checked by hand afterwards; the logs do not
+say whether `start` used the process or the directory fallback). That is the whole extent of the
+real-world check: a handful of renders on one machine, never two at once. Not seen live: a
+failing render, a timeout, a SIGKILL escalation, a Telegram error answer, a checkpoint caught
+mid-write by the scan (the zip end record check was only tried by truncating a file on macOS),
+or a cut mediapy mp4 (`video_complete` accepted mediapy's finished files, and was otherwise
+checked only against mp4s made by ffmpeg, both layouts, every cut). The parser has seen one real
+command-line shape (a uv venv `.../bin/train <task> ...`).
