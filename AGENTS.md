@@ -271,8 +271,8 @@ Telegram sink (`telegram.py`, `sinks.py`); and the startup and polling loop (`st
 Linux, none skipped, plus ruff clean). The two real-`/proc` tests (process listing smoke test,
 run-dir lookup via the real `cwd` link) skip on macOS and pass on Linux. The CLI tests patch out
 `start` and `watch`, plus two run the real CLI in a subprocess against a fake `play` and send it
-SIGTERM and SIGINT. `chat-id`'s `get_chats` (`getUpdates`) has only run against a fake
-transport. The `test` command's `send_text` (`sendMessage`) sent one real message on
+SIGTERM and SIGINT. `chat-id`'s `get_chats` (`getUpdates`) listed one real private chat on
+2026-11-12; its other update kinds and error paths only ran against a fake transport. The `test` command's `send_text` (`sendMessage`) sent one real message on
 2026-11-12 (`telegram: ok`); its error paths only ran against a fake transport. The `docs` sink and the GPU load gate are not implemented yet.
 
 Real runs (Linux, 2026-11-12): `watch` ran from the CLI against two live mjlab trainings
