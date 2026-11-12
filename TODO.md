@@ -5,7 +5,8 @@
 - [x] Run `watch` against a real mjlab training (real `play`, real `/proc`, real checkpoints).
 - [x] Send one real message through the Telegram sink.
 - [ ] `docs` sink: markdown run log.
-- [ ] GPU load gate: check just before the render, on automatically when `nvidia-smi` is found.
+- [x] GPU load gate: check just before the render, on automatically when `nvidia-smi` is found
+  (free memory only, `render.min_free_gpu_mib`).
 
 ## Bugs
 

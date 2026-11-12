@@ -19,7 +19,13 @@ from mjlab_video_progress.config import (
     WatchConfig,
 )
 from mjlab_video_progress.discovery import Run
-from mjlab_video_progress.exceptions import ConfigError, DiscoveryError, RenderError, SinkError
+from mjlab_video_progress.exceptions import (
+    ConfigError,
+    DiscoveryError,
+    GpuError,
+    RenderError,
+    SinkError,
+)
 from mjlab_video_progress.scan import Checkpoint
 from mjlab_video_progress.sinks import Delivery
 from mjlab_video_progress.store import store_video
@@ -412,3 +418,40 @@ def test_watch_does_not_swallow_ctrl_c(wcfg, run, where):
     render = interrupt if where == "render" else FakeRender()
     with pytest.raises(KeyboardInterrupt):
         watch_loop(wcfg, session, sleep, render)
+
+
+# --- GPU gate ------------------------------------------------------------------------------------
+
+
+def test_too_little_free_gpu_memory_defers_the_render(cfg, run, monkeypatch, caplog):
+    add_checkpoints(run, 100)
+    seen = []
+    monkeypatch.setattr(watch, "free_mib", lambda args: seen.append(args) or 2047)
+    render, state = FakeRender(), {}
+    with caplog.at_level(logging.INFO):
+        poll_run(cfg, run, state, [FakeSink()], render)
+    assert seen == [cfg.render.extra_args]
+    assert render.calls == [] and state == {}  # not marked handled: the next pass tries again
+    assert "deferring exp/2026-11-09_12-00-00 iteration 100: 2047 MiB free" in caplog.text
+    monkeypatch.setattr(watch, "free_mib", lambda args: 2048)
+    poll_run(cfg, run, state, [FakeSink()], render)
+    assert len(render.calls) == 1 and state == {run.run_dir: 100}
+
+
+def test_gate_is_not_asked_when_nothing_is_due(cfg, run, monkeypatch):
+    monkeypatch.setattr(watch, "free_mib", lambda args: pytest.fail("asked"))
+    poll_run(cfg, run, {}, [], FakeRender())
+
+
+def test_a_failing_gpu_check_renders_anyway(cfg, run, monkeypatch, caplog):
+    add_checkpoints(run, 100)
+
+    def broken(args):
+        raise GpuError("nvidia-smi could not read the free memory of GPU 0: boom")
+
+    monkeypatch.setattr(watch, "free_mib", broken)
+    render = FakeRender()
+    with caplog.at_level(logging.WARNING):
+        poll_run(cfg, run, {}, [], render)
+    assert len(render.calls) == 1
+    assert "rendering anyway" in caplog.text and "boom" in caplog.text

@@ -168,6 +168,7 @@ from mjlab_video_progress import cli, watch
 
 signal.signal(signal.SIGINT, signal.default_int_handler)  # even if the parent ignores SIGINT
 watch.start = partial(watch.start, proc_root=Path(sys.argv[2]))  # macOS has no /proc
+watch.free_mib = lambda extra_args: None  # never the real nvidia-smi
 sys.exit(cli.main(["watch", "--config", sys.argv[1]]))
 """
 

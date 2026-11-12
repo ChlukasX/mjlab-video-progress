@@ -23,6 +23,11 @@ Contract:
   ``state`` maps ``run.run_dir`` to the last iteration handled (a missing key means none yet) and
   is updated in place. It scans the run dir, asks ``next_due`` (``cfg.watch.every``) and returns
   when nothing is due. Otherwise, for the one checkpoint it picked (the newest due):
+  0. the GPU gate: ``gpu.free_mib(cfg.render.extra_args)`` (looked up on this module at call
+     time, so tests can replace ``watch.free_mib``). Below ``cfg.render.min_free_gpu_mib`` it
+     logs and returns without touching ``state``, so the next pass tries again (the checkpoint
+     is deferred, not lost; a newer due one may replace it). ``None`` (no ``nvidia-smi``) means
+     no gate. A ``GpuError`` is logged as a warning and the render goes ahead;
   1. it records that iteration in ``state`` **before** rendering, so whatever fails afterwards the
      same checkpoint is never tried again (no retry storm; the next attempt is the next due
      checkpoint);
@@ -53,7 +58,8 @@ from pathlib import Path
 
 from mjlab_video_progress.config import Config, RenderConfig
 from mjlab_video_progress.discovery import Run, discover_runs
-from mjlab_video_progress.exceptions import RenderError, SinkError
+from mjlab_video_progress.exceptions import GpuError, RenderError, SinkError
+from mjlab_video_progress.gpu import free_mib
 from mjlab_video_progress.render import render_checkpoint
 from mjlab_video_progress.scan import Checkpoint, next_due, scan_checkpoints
 from mjlab_video_progress.sinks import Delivery
@@ -81,8 +87,23 @@ def poll_run(
     due = next_due(scan_checkpoints(run.run_dir), state.get(run.run_dir), cfg.watch.every)
     if due is None:
         return
-    state[run.run_dir] = due.iteration  # before the render: whatever fails, never tried again
     name = run_name(run)
+    try:
+        free = free_mib(cfg.render.extra_args)
+    except GpuError as e:  # ponytail: fail open, a broken nvidia-smi must not stop all renders
+        log.warning("GPU check for %s failed, rendering anyway: %s", name, e)
+        free = None
+    if free is not None and free < cfg.render.min_free_gpu_mib:
+        # ponytail: logged every pass while deferred; log once per checkpoint if it gets noisy
+        log.info(
+            "deferring %s iteration %d: %d MiB free on the GPU, need %d",
+            name,
+            due.iteration,
+            free,
+            cfg.render.min_free_gpu_mib,
+        )
+        return
+    state[run.run_dir] = due.iteration  # before the render: whatever fails, never tried again
     work_dir = run_output_dir(cfg.output.dir, run.run_dir) / ".work"  # per run: watchers can share
     try:
         shutil.rmtree(work_dir, ignore_errors=True)

@@ -86,6 +86,11 @@ def test_wrong_type_names_key(tmp_path, old, new, key):
             "timeout_seconds = 600\nvideo_length = 0",
             "render.video_length",
         ),
+        (
+            "timeout_seconds = 600",
+            "timeout_seconds = 600\nmin_free_gpu_mib = 0",
+            "render.min_free_gpu_mib",
+        ),
     ],
 )
 def test_non_positive_integers_rejected(tmp_path, old, new, key):
@@ -99,6 +104,7 @@ def test_defaults_apply(tmp_path):
     assert cfg.render.num_envs == 1
     assert cfg.render.video_length == 200
     assert cfg.render.extra_args == ()
+    assert cfg.render.min_free_gpu_mib == 2048
     # None means "use what discovery finds"; Config must not invent a value.
     assert cfg.render.cwd is None
     assert cfg.watch.log_root is None

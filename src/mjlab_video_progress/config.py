@@ -12,6 +12,8 @@ Contract:
 - A leading ``~`` or ``~user`` in a path expands to that home directory, the way a shell expands
   ``--log-root ~/x`` before mjlab sees it (mjlab itself never expands ``~``). An unknown user or
   a missing home directory raises ``ConfigError`` naming the key. A ``~`` elsewhere is literal.
+- ``render.min_free_gpu_mib`` (positive int, default 2048) is the free memory the GPU gate in
+  ``watch.poll_run`` requires before a render (a real render peaked at 1289 MiB).
 - Relative paths resolve against the config file's directory; absolute paths are unchanged.
 - Loading never touches the filesystem under ``watch.log_root`` (hard rule 1).
 
@@ -50,6 +52,7 @@ class RenderConfig:
     video_length: int = 200
     extra_args: tuple[str, ...] = ()
     cwd: Path | None = None
+    min_free_gpu_mib: int = 2048
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,7 @@ _SPEC = {
         "video_length": (_int, 200),
         "extra_args": (_strs, ()),
         "cwd": (_path, None),
+        "min_free_gpu_mib": (_int, 2048),
     },
     "output": {"dir": (_path, _REQUIRED)},
     "sinks.telegram": {

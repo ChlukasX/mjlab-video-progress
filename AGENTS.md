@@ -12,7 +12,10 @@ Guidance for AI coding agents working in this repo. Humans: see `README.md`.
 training run. Linux is the supported platform.
 
 Goal: low impact on the training run. A render uses `--num-envs 1` and a hard timeout by
-default. The actual cost has not yet been measured.
+default, and waits while the GPU has less than `render.min_free_gpu_mib` free. One real render
+(720x1280, 500 frames, next to a training on an RTX 4090) used at most 1289 MiB of GPU memory for
+about 67 s; utilisation was 98-100% from the training before, during and after. Its effect on the
+training's iteration time has not been measured.
 
 ## Commands
 
@@ -32,7 +35,7 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 ## Code map (`src/mjlab_video_progress/`)
 
 - `exceptions.py`: every custom exception, in one place: `ConfigError`, and `DiscoveryError`
-  with its subclass `RunDirNotFound`, `RenderError` and `SinkError`. `config` and `discovery`
+  with its subclass `RunDirNotFound`, `RenderError`, `GpuError` and `SinkError`. `config` and `discovery`
   import them from here, so the old import paths (`config.ConfigError`,
   `discovery.RunDirNotFound`) still work.
 - `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
@@ -100,6 +103,13 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   exist yet): `watch` seeds `last_rendered` from it after a restart.
   `run_output_dir(output_dir, run_dir)` is `<output_dir>/<experiment>/<run>`; `watch` puts the
   run's `.work` dir there. The `iter_<N>` dir is the bundle; it holds only the video in v1.
+- `gpu.py`: the GPU gate's reading. `gpu_index(extra_args)` is the `N` of the last
+  `--device cuda:N` / `--device=cuda:N` in `render.extra_args`, else 0 (mjlab's default
+  `cuda:0`; `cpu` also gives 0). `free_mib(extra_args, run, which)` returns that GPU's free memory
+  in MiB from `nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits --id=N` (30 s
+  timeout), `None` when `nvidia-smi` is not on `PATH`, and raises `GpuError` on any failure.
+  `run` and `which` are injected; `tests/conftest.py` replaces `watch.free_mib` for every test, so
+  no test calls the real `nvidia-smi`.
 - `sinks.py`: `Delivery(video, task, run_dir, iteration)`, what every sink is handed. A sink
   delivers the video only and raises `SinkError` when it cannot.
 - `telegram.py`: the Telegram sink. `read_token(cfg, environ=None)` returns the bot token from
@@ -126,7 +136,10 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   with its traceback and the loop goes on; `KeyboardInterrupt` and `SystemExit` end it.
   `poll_run(cfg, run, state, sinks, render=render_checkpoint)` is one pass for one run. `state`
   maps `run_dir` to the last iteration handled and is updated in place. When `next_due` picks a
-  checkpoint it records the iteration **first**, so a failure afterwards never causes a retry; it
+  checkpoint it first asks the GPU gate (`free_mib`, looked up on the module at call time): below
+  `render.min_free_gpu_mib` (default 2048) it logs `deferring ...` and returns without touching
+  `state`, so the next pass tries again; `None` means no gate; a `GpuError` is logged and the
+  render goes ahead (fail open). Past the gate it records the iteration **first**, so a failure afterwards never causes a retry; it
   removes the run's work dir `<output.dir>/<experiment>/<run>/.work`, renders into it (left behind afterwards, for `play.log`), stores
   the video and calls each sink with a `Delivery` for the stored video. A `RenderError` or
   `OSError` from the render or the store, and a `SinkError` or `OSError` from a sink, are logged as
@@ -233,7 +246,17 @@ Watch, by design:
   render. A transient failure loses that iteration's video (and Telegram message); the next
   attempt is the next due checkpoint. A restart retries it, because seeding uses stored videos
   only, and a sink that failed is not retried either (no per-sink delivery state exists).
-- The GPU load gate (see `TODO.md`) is not built; it would be a check just before the render.
+- The GPU gate checks free memory only. Utilisation is not checked: the training keeps it near
+  100%, so a utilisation threshold would never let a render through. The gate does not reserve
+  anything: the memory can be taken between the check and the render (another user's job, or
+  another watcher, which checks the same GPU independently).
+- While deferred, the `deferring ...` line is logged at INFO every pass. A deferred checkpoint is
+  replaced by a newer one once that is due (`next_due` picks the newest).
+- A failing `nvidia-smi` (driver mismatch, timeout) is logged as a warning every pass and the
+  render runs anyway, as without the gate.
+- The `--device` index is passed to `nvidia-smi --id` as is. `CUDA_VISIBLE_DEVICES` or
+  `CUDA_DEVICE_ORDER` (CUDA orders fastest first by default, `nvidia-smi` by PCI bus) can make
+  them name different GPUs on a multi-GPU machine; not handled.
 - Runs are discovered once at start. If the training process starts later, or ends, `watch` does
   not notice; it polls the run dirs it found until it is stopped (final-checkpoint detection is
   deferred).
@@ -265,15 +288,19 @@ listing, the run-dir lookup, the directory fallback and the glue choosing betwee
 (`discover_runs`, all in `discovery.py`); the checkpoint scan and the "due" choice (`scan.py`);
 the mp4 completeness check and running `play` (`render.py`); the video store (`store.py`); the
 Telegram sink (`telegram.py`, `sinks.py`); and the startup and polling loop (`start`, `watch` and
-`poll_run` in `watch.py`). Unit tests (`tests/test_config.py` 64, `tests/test_discovery.py` 58,
+`poll_run` in `watch.py`); the GPU gate (`gpu.py`, used by `poll_run`). Unit tests (`tests/test_config.py` 65, `tests/test_discovery.py` 58,
 `tests/test_scan.py` 20, `tests/test_render.py` 30, `tests/test_store.py` 9,
-`tests/test_telegram.py` 45, `tests/test_watch.py` 33, `tests/test_cli.py` 23; 282 passing on
+`tests/test_telegram.py` 45, `tests/test_watch.py` 36, `tests/test_cli.py` 23,
+`tests/test_gpu.py` 15; 301 passing on
 Linux, none skipped, plus ruff clean). The two real-`/proc` tests (process listing smoke test,
 run-dir lookup via the real `cwd` link) skip on macOS and pass on Linux. The CLI tests patch out
 `start` and `watch`, plus two run the real CLI in a subprocess against a fake `play` and send it
 SIGTERM and SIGINT. `chat-id`'s `get_chats` (`getUpdates`) listed one real private chat on
 2026-11-12; its other update kinds and error paths only ran against a fake transport. The `test` command's `send_text` (`sendMessage`) sent one real message on
-2026-11-12 (`telegram: ok`); its error paths only ran against a fake transport. The `docs` sink and the GPU load gate are not implemented yet.
+2026-11-12 (`telegram: ok`); its error paths only ran against a fake transport. The `docs` sink is not implemented yet. `free_mib` ran once against the real `nvidia-smi` on
+2026-11-12 (one RTX 4090: the free MiB for no `--device` and `cuda:0`, and `GpuError` for
+`cuda:5`); the gate itself has not run inside a live `watch`, and no render has been deferred
+for real.
 
 Real runs (Linux, 2026-11-12): `watch` ran from the CLI against two live mjlab trainings
 (one resumed from a checkpoint, each with its own config), with

@@ -60,6 +60,7 @@ Relative paths are relative to the config file. Optional keys:
 | `render.num_envs` | `1` | |
 | `render.video_length` | `200` | Frames per video. |
 | `render.extra_args` | `[]` | Appended to the `play` command, e.g. `["--device", "cuda:0"]`. |
+| `render.min_free_gpu_mib` | `2048` | With `nvidia-smi` on `PATH`, a render waits for the next poll while the GPU from `--device` (default `cuda:0`) has less free memory. A render used about 1.3 GB. |
 
 ### 4. Telegram
 
