@@ -9,6 +9,7 @@ Contract:
   ``discovery.DiscoveryError`` / ``discovery.RunDirNotFound`` are the same classes.
 - ``RenderError``: raised by ``render.render_checkpoint`` when ``play`` produced no video.
 - ``GpuError``: raised by ``gpu.free_mib`` when ``nvidia-smi`` is there but gave no reading.
+- ``WatcherConflict``: raised by ``watch.start`` when another watcher holds a run's lock.
 - ``SinkError``: raised by a sink (``telegram.deliver_telegram``) when it could not deliver. Its
   message says why and never contains a secret.
 """
@@ -38,3 +39,7 @@ class SinkError(Exception):
 
 class GpuError(Exception):
     """nvidia-smi is on PATH but did not report the free GPU memory; the message says why."""
+
+
+class WatcherConflict(Exception):
+    """Another watcher already watches one of the runs; the message names the run and its pid."""

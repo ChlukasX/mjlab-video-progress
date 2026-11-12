@@ -25,6 +25,9 @@ uv run pytest                            # tests/ ; ffmpeg-dependent tests skip 
 uv run ruff check .
 uv run ruff format --check .             # line length 100; rules E, F, I, B, UP
 uv run mjlab-video-progress watch --config PATH   # the tool itself (console script)
+uv run mjlab-video-progress watch --config PATH -d   # same, detached; log in ~/.local/state/...
+uv run mjlab-video-progress ps                    # list running watchers
+uv run mjlab-video-progress stop PID... | --all   # SIGTERM them and wait
 uv run mjlab-video-progress test --config PATH    # send a test message through every sink
 uv run mjlab-video-progress chat-id --token-file PATH   # list the chats the bot has seen
 ```
@@ -35,7 +38,8 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
 ## Code map (`src/mjlab_video_progress/`)
 
 - `exceptions.py`: every custom exception, in one place: `ConfigError`, and `DiscoveryError`
-  with its subclass `RunDirNotFound`, `RenderError`, `GpuError` and `SinkError`. `config` and `discovery`
+  with its subclass `RunDirNotFound`, `RenderError`, `GpuError`, `WatcherConflict` and
+  `SinkError`. `config` and `discovery`
   import them from here, so the old import paths (`config.ConfigError`,
   `discovery.RunDirNotFound`) still work.
 - `config.py`: loads and validates the TOML config (`load_config`, frozen dataclasses,
@@ -125,10 +129,25 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   HTTP error status instead of raising. One attempt, no retry. `send_text(cfg, token, text, post)`
   sends a plain `sendMessage` through the same request and error handling (used by `test`).
   `get_chats(token, post)` returns `{chat id: name}` from `getUpdates` (used by `chat-id`).
-- `watch.py`: `start(cfg, environ, proc_root, post)` returns a `Session(runs, state, sinks)`: it
-  reads the Telegram token (`read_token`; `ConfigError` on a problem) and, when it came from the
-  environment, removes that variable from `environ` (`os.environ` by default) so `play` never
-  inherits it; discovers the runs once (`discover_runs`; `DiscoveryError` propagates); seeds
+- `watchers.py`: one watcher per run, and finding, detaching and stopping watchers.
+  `lock_run(run_out)` takes a non-blocking `flock` on `<output.dir>/<experiment>/<run>/.watch.lock`
+  and returns the open file, or `None` when another process holds it; the kernel frees it when
+  the process dies, even on SIGKILL. `find_watchers(proc_root, uid)` lists the same-user
+  processes holding a `.watch.lock` open (from `/proc/<pid>/fd`), as `Watcher(pid, config, locks,
+  log, started)`: `--config` from the cmdline made absolute against its cwd, `log` = stdout's
+  target when it is a regular file (a detached watcher), start time from `stat`. No state files:
+  a holder of a lock is a watcher. `default_log(config)` is
+  `$XDG_STATE_HOME/mjlab-video-progress/<config stem>.log` (`~/.local/state` by default).
+  `detach(log)` double-forks with `setsid` and returns the detached pid in the original process,
+  `None` in the detached one (stdin `/dev/null`, stdout and stderr appended to `log`).
+  `stop(pids, ...)` sends SIGTERM and waits up to 30 s (a zombie counts as gone), returning the
+  pids still running; no SIGKILL, since a killed watcher leaves `play` running.
+- `watch.py`: `start(cfg, environ, proc_root, post)` returns a `Session(runs, state, sinks,
+  locks)`: it reads the Telegram token (`read_token`; `ConfigError` on a problem) and, when it
+  came from the environment, removes that variable from `environ` (`os.environ` by default) so
+  `play` never inherits it; discovers the runs once (`discover_runs`; `DiscoveryError`
+  propagates); takes each run's lock (`lock_run`; a held one releases the others and raises
+  `WatcherConflict` naming the run and the holder's pid); seeds
   `state[run_dir]` from `last_stored_iteration`; and builds the sink callables. The Telegram sink is
   a closure, not a `partial`, so `repr(session)` never shows the token.
   `watch(cfg, session, sleep, render)` loops forever: every pass calls `poll_run` for each run in
@@ -146,16 +165,22 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   warnings (the other sinks still run); anything else, and a vanished run dir, propagates to
   `watch`. It never logs a sink (its repr can hold the token). `run_name(run)` is
   `<experiment>/<run>`, used in log lines.
-- `cli.py`: `main(argv)` is the `mjlab-video-progress` console script (`[project.scripts]`), three
-  subcommands. `chat-id [--token-file PATH]` (token from the file, with `read_token`'s checks, else
+- `cli.py`: `main(argv)` is the `mjlab-video-progress` console script (`[project.scripts]`), five
+  subcommands. `ps` prints `PID UPTIME CONFIG RUNS LOG` per watcher (`find_watchers`), or
+  `no watchers running`. `stop PID... | --all` refuses (exit 1, nothing signalled) a pid `ps` does
+  not list, else calls `watchers.stop` and prints `stopped <pid>` or `error: <pid> still
+  running`. `chat-id [--token-file PATH]` (token from the file, with `read_token`'s checks, else
   `TELEGRAM_BOT_TOKEN`; no config needed) prints `<id>  <name>` per chat the bot has seen; with
   none it explains how to get a message to the bot or the id from elsewhere, and returns 1.
   `test --config PATH` sends a test message through each configured sink
   (`telegram.send_text`) and prints `<sink>: ok` or `<sink>: <error>`; exit 0 only if all
   worked (1 also for no sink). No discovery, no render, the environment is left alone.
   `watch --config PATH` logs INFO to stderr, loads the config, calls
-  `watch.start`, logs `watching N run(s): ...` and runs `watch.watch`. A `ConfigError` or
-  `DiscoveryError` prints `error: <message>` and returns 1; any other exception shows its
+  `watch.start`, logs `watching N run(s): ...` and runs `watch.watch`. With `-d` (and optional
+  `--log PATH`, an argparse error without `-d`) it detaches after `start`, so config, discovery and
+  lock errors still reach the terminal; the original process prints `watcher <pid> started, log:
+  <path>` and exits 0. A `ConfigError`, `DiscoveryError` or `WatcherConflict` prints
+  `error: <message>` and returns 1; any other exception shows its
   traceback. While the loop runs SIGTERM is turned into `SystemExit` (the old handler is restored
   afterwards), and `KeyboardInterrupt` and `SystemExit` end the loop with exit code 0, after
   `render_checkpoint` has stopped `play` and its child. argparse errors exit 2.
@@ -168,7 +193,8 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
    A test asserts a **scan** leaves the logs tree byte- and mtime-identical. The tool writes
    only: the output dir, run-log files named in the `docs` sink, and an optional `image_dir` /
    `dest`. Never run git from the tool. The tool may signal the process group of its own render
-   subprocess (once the video is done, or on timeout), and never anything else.
+   subprocess (once the video is done, or on timeout), and SIGTERM a watcher `find_watchers`
+   lists (`stop`), and never anything else.
 
 ## Conventions
 
@@ -266,6 +292,22 @@ Watch, by design:
   A SIGKILL of the watcher cannot be handled: a render in progress then leaves `play` running,
   and under viser it never exits by itself, so someone has to stop it.
 
+Watchers (`watch -d`, `ps`, `stop`), by design:
+
+- One watcher per run, enforced by the `flock` on `.watch.lock` in the run's output dir. The lock
+  is per output dir: two watchers with different `output.dir` on the same run are not stopped.
+- Discovery takes any live `train` process of the user before `watch.log_root`, so a config whose
+  own training has ended latches onto another user run; the lock then refuses it if that run is
+  already watched (seen live on 2026-11-12 before the lock existed). Not fixed: discovery does not
+  filter processes by `log_root`.
+- `ps` only sees watchers of this version (they hold the lock); an older watcher is invisible.
+  It sees only the user's own processes. `play` does not inherit the lock (Python opens files
+  non-inheritable and `subprocess` closes other fds on exec); `detach`'s `fork` does keep it.
+- `stop` waits up to 30 s and never escalates. A watcher mid-render needs up to the 10 s SIGKILL
+  grace of `play` plus its own exit.
+- A detached watcher keeps the cwd it was started in and appends to its log forever (no
+  rotation).
+
 Telegram, from the Bot API docs at core.telegram.org (`sendVideo`, multipart upload, answer
 format), and four real `sendVideo` deliveries on 2026-11-12:
 
@@ -288,14 +330,19 @@ listing, the run-dir lookup, the directory fallback and the glue choosing betwee
 (`discover_runs`, all in `discovery.py`); the checkpoint scan and the "due" choice (`scan.py`);
 the mp4 completeness check and running `play` (`render.py`); the video store (`store.py`); the
 Telegram sink (`telegram.py`, `sinks.py`); and the startup and polling loop (`start`, `watch` and
-`poll_run` in `watch.py`); the GPU gate (`gpu.py`, used by `poll_run`). Unit tests (`tests/test_config.py` 65, `tests/test_discovery.py` 58,
+`poll_run` in `watch.py`); the GPU gate (`gpu.py`, used by `poll_run`); the run lock, `watch -d`,
+`ps` and `stop` (`watchers.py`, `cli.py`). Unit tests (`tests/test_config.py` 65,
+`tests/test_discovery.py` 58,
 `tests/test_scan.py` 20, `tests/test_render.py` 30, `tests/test_store.py` 9,
-`tests/test_telegram.py` 45, `tests/test_watch.py` 36, `tests/test_cli.py` 23,
-`tests/test_gpu.py` 15; 301 passing on
+`tests/test_telegram.py` 45, `tests/test_watch.py` 38, `tests/test_cli.py` 35,
+`tests/test_gpu.py` 15, `tests/test_watchers.py` 6; 321 passing on
 Linux, none skipped, plus ruff clean). The two real-`/proc` tests (process listing smoke test,
 run-dir lookup via the real `cwd` link) skip on macOS and pass on Linux. The CLI tests patch out
 `start` and `watch`, plus two run the real CLI in a subprocess against a fake `play` and send it
-SIGTERM and SIGINT. `chat-id`'s `get_chats` (`getUpdates`) listed one real private chat on
+SIGTERM and SIGINT, and one runs a real `watch -d` (real fork, real `/proc` for `ps`), checks
+that a second `watch -d` on the run is refused naming the pid, and stops it with `stop` (`play`
+and its child gone). `ps`, `stop 1` and a `watch -d` config error ran once on the real machine
+(2026-11-12); a real watcher has not yet been started with `-d` against a live training. `chat-id`'s `get_chats` (`getUpdates`) listed one real private chat on
 2026-11-12; its other update kinds and error paths only ran against a fake transport. The `test` command's `send_text` (`sendMessage`) sent one real message on
 2026-11-12 (`telegram: ok`); its error paths only ran against a fake transport. The `docs` sink is not implemented yet. `free_mib` ran once against the real `nvidia-smi` on
 2026-11-12 (one RTX 4090: the free MiB for no `--device` and `cuda:0`, and `GpuError` for

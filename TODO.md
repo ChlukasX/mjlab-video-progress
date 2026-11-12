@@ -19,7 +19,10 @@
 - [x] `chat-id` command: print the chat ids the bot has seen (`getUpdates`, token read like
   `watch` does), or say where else to get the id; replaces the Python one-liner in the README.
 - [x] `test` command: send a test message to every configured sink (token, chat id, network).
+- [x] `watch -d` (detached), `ps` and `stop`; one watcher per run (lock).
 - [ ] Pick up each new `train` process as it appears, instead of discovering runs once at start.
+- [ ] Discovery ignores `watch.log_root` when a `train` process is running: a config whose
+  training ended picks up another run. Filter processes by `log_root` when it is set.
 
 ## Deferred (later version)
 

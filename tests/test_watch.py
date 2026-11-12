@@ -25,12 +25,14 @@ from mjlab_video_progress.exceptions import (
     GpuError,
     RenderError,
     SinkError,
+    WatcherConflict,
 )
 from mjlab_video_progress.scan import Checkpoint
 from mjlab_video_progress.sinks import Delivery
 from mjlab_video_progress.store import store_video
 from mjlab_video_progress.watch import Session, poll_run, start
 from mjlab_video_progress.watch import watch as watch_loop
+from mjlab_video_progress.watchers import lock_run
 
 RUN_NAME = "exp/2026-11-09_12-00-00"
 
@@ -455,3 +457,24 @@ def test_a_failing_gpu_check_renders_anyway(cfg, run, monkeypatch, caplog):
         poll_run(cfg, run, {}, [], render)
     assert len(render.calls) == 1
     assert "rendering anyway" in caplog.text and "boom" in caplog.text
+
+
+# --- one watcher per run ------------------------------------------------------------------------
+
+
+def test_start_holds_the_run_lock_for_the_session(wcfg, run, tmp_path):
+    session = start(wcfg, {}, no_processes(tmp_path))
+    run_out = wcfg.output.dir / RUN_NAME
+    assert lock_run(run_out) is None
+    for lock in session.locks:
+        lock.close()
+    assert lock_run(run_out) is not None
+
+
+def test_start_refuses_a_run_another_watcher_holds(wcfg, run, tmp_path):
+    held = lock_run(wcfg.output.dir / RUN_NAME)
+    try:
+        with pytest.raises(WatcherConflict, match=f"{RUN_NAME} is already watched"):
+            start(wcfg, {}, no_processes(tmp_path))
+    finally:
+        held.close()

@@ -99,11 +99,15 @@ variable named in `token_env`); `play` never sees it. Videos over 50 MB are not 
 Once the training has created its run directory:
 
 ```bash
-tmux new -s progress
-mjlab-video-progress watch --config ~/.config/mjlab-video-progress/progress.toml
+mjlab-video-progress watch --config ~/.config/mjlab-video-progress/progress.toml -d
+mjlab-video-progress ps          # PID, uptime, config, run, log of every running watcher
+mjlab-video-progress stop PID    # or --all
 ```
 
-Detach with `Ctrl-b d`. Ctrl-C or SIGTERM stops it, including a render in progress.
+`-d` runs it in the background with its log in
+`~/.local/state/mjlab-video-progress/<config name>.log` (`--log PATH` to change). Without `-d` it
+keeps the terminal; Ctrl-C or SIGTERM stops it, including a render in progress. A second watcher
+on the same run is refused.
 
 - It finds your running `train` process once at start (falling back to `watch.log_root`), and
   keeps polling that run until stopped.

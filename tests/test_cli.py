@@ -18,10 +18,12 @@ from helpers import assert_silent, fake_play, zip_bytes
 
 from mjlab_video_progress import cli, telegram
 from mjlab_video_progress import watch as watch_module
+from mjlab_video_progress import watchers as watchers_module
 from mjlab_video_progress.config import load_config
 from mjlab_video_progress.discovery import Run
-from mjlab_video_progress.exceptions import ConfigError, RunDirNotFound, SinkError
+from mjlab_video_progress.exceptions import ConfigError, RunDirNotFound, SinkError, WatcherConflict
 from mjlab_video_progress.watch import Session
+from mjlab_video_progress.watchers import Watcher, find_watchers
 
 CONFIG = """\
 [watch]
@@ -75,7 +77,17 @@ def test_help_names_the_watch_command(capsys):
     assert e.value.code == 0 and "watch" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("argv", [[], ["bogus"], ["watch"]])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["bogus"],
+        ["watch"],
+        ["watch", "--config", "c.toml", "--log", "x.log"],  # --log needs -d
+        ["stop"],
+        ["stop", "1", "--all"],
+    ],
+)
 def test_bad_arguments_are_argparse_errors(capsys, argv):
     with pytest.raises(SystemExit) as e:
         cli.main(argv)
@@ -109,7 +121,11 @@ def test_invalid_config_names_the_key(config, capsys, monkeypatch, session):
 
 @pytest.mark.parametrize(
     "error",
-    [RunDirNotFound("no run dir under /x"), ConfigError("sinks.telegram: no token")],
+    [
+        RunDirNotFound("no run dir under /x"),
+        ConfigError("sinks.telegram: no token"),
+        WatcherConflict("exp/run is already watched by pid 7"),
+    ],
 )
 def test_errors_from_start(config, capsys, monkeypatch, session, error):
     def failing_start(cfg):
@@ -167,9 +183,9 @@ from pathlib import Path
 from mjlab_video_progress import cli, watch
 
 signal.signal(signal.SIGINT, signal.default_int_handler)  # even if the parent ignores SIGINT
-watch.start = partial(watch.start, proc_root=Path(sys.argv[2]))  # macOS has no /proc
+watch.start = partial(watch.start, proc_root=Path(sys.argv[1]))  # macOS has no /proc
 watch.free_mib = lambda extra_args: None  # never the real nvidia-smi
-sys.exit(cli.main(["watch", "--config", sys.argv[1]]))
+sys.exit(cli.main(sys.argv[2:]))  # argv: proc_root, then the CLI arguments
 """
 
 
@@ -213,7 +229,7 @@ dir = {json.dumps(str(tmp_path / "out"))}
     )
     stderr_log = tmp_path / "stderr.log"
     with open(stderr_log, "wb") as err:
-        cmd = [sys.executable, str(driver), str(config), str(proc_root)]
+        cmd = [sys.executable, str(driver), str(proc_root), "watch", "--config", str(config)]
         proc = subprocess.Popen(cmd, stderr=err, start_new_session=True)
     work = tmp_path / "out/exp/2026-11-09_12-00-00/.work"
     try:
@@ -318,3 +334,152 @@ def test_chat_id_errors_are_reported(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(telegram, "get_chats", failing)
     assert cli.main(["chat-id", "--token-file", str(chat_id_token(tmp_path))]) == 1
     assert "error: Telegram error 401: Unauthorized" in capsys.readouterr().err
+
+
+# --- watch -d, ps, stop -------------------------------------------------------------------------
+
+
+def test_detach_returns_in_the_original_process(config, monkeypatch, session, capsys, tmp_path):
+    calls = patch_loop(monkeypatch, session)
+    detached = []
+    monkeypatch.setattr(watchers_module, "detach", lambda log: detached.append(log) or 4242)
+    log = tmp_path / "w.log"
+    assert cli.main(["watch", "--config", str(config), "-d", "--log", str(log)]) == 0
+    assert detached == [log] and calls == []
+    assert capsys.readouterr().out == f"watcher 4242 started, log: {log}\n"
+
+
+def test_detach_runs_the_loop_in_the_detached_process(config, monkeypatch, session, tmp_path):
+    calls = patch_loop(monkeypatch, session)
+    monkeypatch.setattr(watchers_module, "detach", lambda log: None)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    assert cli.main(["watch", "--config", str(config), "-d"]) == 0
+    assert calls == [(load_config(config), session)]
+
+
+def test_ps_prints_a_table(monkeypatch, capsys, tmp_path):
+    lock = tmp_path / "out/exp/2026-11-09_12-00-00/.watch.lock"
+    found = [
+        Watcher(7, tmp_path / "a.toml", (lock,), tmp_path / "a.log", time.time() - 3725),
+        Watcher(12345, None, (lock, lock), None, None),
+    ]
+    monkeypatch.setattr(watchers_module, "find_watchers", lambda: found)
+    assert cli.main(["ps"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["PID", "UPTIME", "CONFIG", "RUNS", "LOG"]
+    assert lines[1].split() == [
+        "7",
+        "1:02:05",
+        str(tmp_path / "a.toml"),
+        "exp/2026-11-09_12-00-00",
+        str(tmp_path / "a.log"),
+    ]
+    assert lines[2].split() == [
+        "12345",
+        "-",
+        "-",
+        "exp/2026-11-09_12-00-00,exp/2026-11-09_12-00-00",
+        "-",
+    ]
+
+
+def test_ps_without_watchers(monkeypatch, capsys):
+    monkeypatch.setattr(watchers_module, "find_watchers", lambda: [])
+    assert cli.main(["ps"]) == 0
+    assert capsys.readouterr().out == "no watchers running\n"
+
+
+def watchers_with_pids(monkeypatch, *pids):
+    found = [Watcher(pid, None, (), None, None) for pid in pids]
+    monkeypatch.setattr(watchers_module, "find_watchers", lambda: found)
+    stopped = []
+
+    def fake_stop(targets):
+        stopped.append(list(targets))
+        return [pid for pid in targets if pid == 13]  # 13 never stops
+
+    monkeypatch.setattr(watchers_module, "stop", fake_stop)
+    return stopped
+
+
+def test_stop_refuses_a_pid_that_is_not_a_watcher(monkeypatch, capsys):
+    stopped = watchers_with_pids(monkeypatch, 7)
+    assert cli.main(["stop", "7", "8"]) == 1
+    assert stopped == [] and "8 is not a running watcher" in capsys.readouterr().err
+
+
+def test_stop_named_and_all(monkeypatch, capsys):
+    stopped = watchers_with_pids(monkeypatch, 7, 9, 13)
+    assert cli.main(["stop", "9"]) == 0
+    assert capsys.readouterr().out == "stopped 9\n"
+    assert cli.main(["stop", "--all"]) == 1
+    out, err = capsys.readouterr()
+    assert out == "stopped 7\nstopped 9\n" and err == "error: 13 still running\n"
+    assert stopped == [[9], [7, 9, 13]]
+
+
+def test_stop_all_without_watchers(monkeypatch):
+    stopped = watchers_with_pids(monkeypatch)
+    assert cli.main(["stop", "--all"]) == 0
+    assert stopped == [[]]
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="needs Linux /proc")
+def test_detached_watcher_is_listed_refuses_a_second_and_stops(tmp_path, capsys):
+    run_dir = tmp_path / "logs/rsl_rl/exp/2026-11-09_12-00-00"
+    run_dir.mkdir(parents=True)
+    (run_dir / "model_100.pt").write_bytes(zip_bytes())
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    play = fake_play(tmp_path, "start_beats()\nbeat()")  # the render hangs until stopped
+    driver = tmp_path / "driver.py"
+    driver.write_text(DRIVER)
+    config = tmp_path / "cfg.toml"
+    config.write_text(
+        f"""\
+[watch]
+every = 100
+log_root = {json.dumps(str(tmp_path / "logs/rsl_rl"))}
+task = "Task-X"
+
+[render]
+command = [{json.dumps(sys.executable)}, {json.dumps(str(play))}]
+timeout_seconds = 60
+
+[output]
+dir = {json.dumps(str(tmp_path / "out"))}
+"""
+    )
+    log = tmp_path / "state/w.log"
+    cmd = [sys.executable, str(driver), str(proc_root), "watch", "--config", str(config)]
+    cmd += ["-d", "--log", str(log)]
+    first = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    assert first.returncode == 0, first.stderr
+    pid = int(first.stdout.split()[1])
+    work = tmp_path / "out/exp/2026-11-09_12-00-00/.work"
+    try:
+        wait_until_play_runs_detached(pid, work, log)
+        [me] = [w for w in find_watchers() if w.pid == pid]
+        assert me.log == log and me.config == config
+        assert me.locks == (tmp_path / "out/exp/2026-11-09_12-00-00/.watch.lock",)
+        second = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        assert second.returncode == 1
+        assert f"is already watched by pid {pid}" in second.stderr
+        assert cli.main(["stop", str(pid)]) == 0
+        assert capsys.readouterr().out == f"stopped {pid}\n"
+        assert_silent(work / "play.beat")
+        assert_silent(work / "child.beat")
+        assert "watching 1 run(s)" in log.read_text() and "stopped" in log.read_text()
+    finally:  # SIGTERM first: a SIGKILLed watcher leaves its play running
+        if pid in [w.pid for w in find_watchers()] and watchers_module.stop([pid], timeout=20):
+            os.kill(pid, signal.SIGKILL)
+
+
+def wait_until_play_runs_detached(pid, work, log):
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        beat = work / "child.beat"
+        if beat.exists() and beat.stat().st_size > 0:
+            return
+        time.sleep(0.05)
+    pytest.fail(f"play never started:\n{log.read_text() if log.exists() else ''}")

@@ -3,15 +3,19 @@
 Contract:
 
 - ``start(cfg, environ=None, proc_root=Path("/proc"), post=urlopen_post)`` returns a
-  ``Session(runs, state, sinks)``. In this order it: reads the Telegram token if
+  ``Session(runs, state, sinks, locks)``. In this order it: reads the Telegram token if
   ``cfg.sinks.telegram`` is set (``read_token``; a problem raises ``ConfigError``) and, when the
   token came from the environment (no ``token_file``), removes that variable from ``environ``
   (``os.environ`` by default) so ``play`` never inherits it; discovers the runs once with
   ``discover_runs(cfg.watch.log_root, cfg.watch.task, proc_root)`` (a ``DiscoveryError``
-  propagates); seeds ``state[run_dir]`` with ``last_stored_iteration(cfg.output.dir, run_dir)``
-  for each run (``None`` when nothing is stored); and builds the sinks list: one callable for
-  Telegram when configured (using ``post``), none otherwise. The Telegram sink is a closure, not a
-  ``functools.partial``, so ``repr(session)`` never contains the token.
+  propagates); takes each run's lock (``watchers.lock_run`` on its output dir; if another watcher
+  holds one, it releases the ones it took and raises ``WatcherConflict`` naming the run and the
+  holder's pid from ``watchers.find_watchers``); seeds ``state[run_dir]`` with
+  ``last_stored_iteration(cfg.output.dir, run_dir)`` for each run (``None`` when nothing is
+  stored); and builds the sinks list: one callable for Telegram when configured (using ``post``),
+  none otherwise. ``Session.locks`` keeps the lock files open for as long as the session lives.
+  The Telegram sink is a closure, not a ``functools.partial``, so ``repr(session)`` never contains
+  the token.
 - ``watch(cfg, session, sleep=time.sleep, render=render_checkpoint)`` loops forever: each pass
   calls ``poll_run`` for every run in ``session.runs`` order, one at a time (renders never
   overlap), then ``sleep(cfg.watch.poll_seconds)``. An ``Exception`` from one run's pass is logged
@@ -53,18 +57,19 @@ import os
 import shutil
 import time
 from collections.abc import Callable, MutableMapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from mjlab_video_progress.config import Config, RenderConfig
 from mjlab_video_progress.discovery import Run, discover_runs
-from mjlab_video_progress.exceptions import GpuError, RenderError, SinkError
+from mjlab_video_progress.exceptions import GpuError, RenderError, SinkError, WatcherConflict
 from mjlab_video_progress.gpu import free_mib
 from mjlab_video_progress.render import render_checkpoint
 from mjlab_video_progress.scan import Checkpoint, next_due, scan_checkpoints
 from mjlab_video_progress.sinks import Delivery
 from mjlab_video_progress.store import last_stored_iteration, run_output_dir, store_video
 from mjlab_video_progress.telegram import Post, deliver_telegram, read_token, urlopen_post
+from mjlab_video_progress.watchers import LOCK_NAME, find_watchers, lock_run
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +142,7 @@ class Session:
     runs: list[Run]
     state: dict[Path, int | None]
     sinks: list[Sink]
+    locks: list = field(default_factory=list)  # open lock files: closing one frees its run
 
 
 def start(
@@ -158,8 +164,23 @@ def start(
 
         sinks.append(send)
     runs = discover_runs(cfg.watch.log_root, cfg.watch.task, proc_root)
+    locks = []
+    for run in runs:
+        lock = lock_run(run_output_dir(cfg.output.dir, run.run_dir))
+        if lock is None:
+            for held in locks:
+                held.close()
+            raise WatcherConflict(_conflict(run_output_dir(cfg.output.dir, run.run_dir), run))
+        locks.append(lock)
     state = {run.run_dir: last_stored_iteration(cfg.output.dir, run.run_dir) for run in runs}
-    return Session(runs, state, sinks)
+    return Session(runs, state, sinks, locks)
+
+
+def _conflict(run_out: Path, run: Run) -> str:
+    lock = run_out / LOCK_NAME
+    pids = [str(w.pid) for w in find_watchers() if lock in w.locks]
+    by = f" by pid {', '.join(pids)}" if pids else ""
+    return f"{run_name(run)} is already watched{by} (see `mjlab-video-progress ps`)"
 
 
 def watch(
