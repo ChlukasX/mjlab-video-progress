@@ -16,11 +16,11 @@ from pathlib import Path
 import pytest
 from helpers import assert_silent, fake_play, zip_bytes
 
-from mjlab_video_progress import cli
+from mjlab_video_progress import cli, telegram
 from mjlab_video_progress import watch as watch_module
 from mjlab_video_progress.config import load_config
 from mjlab_video_progress.discovery import Run
-from mjlab_video_progress.exceptions import ConfigError, RunDirNotFound
+from mjlab_video_progress.exceptions import ConfigError, RunDirNotFound, SinkError
 from mjlab_video_progress.watch import Session
 
 CONFIG = """\
@@ -226,3 +226,46 @@ dir = {json.dumps(str(tmp_path / "out"))}
         if proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
+
+
+# --- test ---------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def telegram_config(tmp_path):
+    path = tmp_path / "cfg.toml"
+    path.write_text(CONFIG + '\n[sinks.telegram]\nchat_id = 42\ntoken_env = "MY_BOT"\n')
+    return path
+
+
+def test_test_sends_the_message_and_reports_ok(telegram_config, monkeypatch, capsys):
+    sent = []
+    monkeypatch.setenv("MY_BOT", "tok")
+    monkeypatch.setattr(telegram, "send_text", lambda cfg, token, text: sent.append((cfg, token)))
+    assert cli.main(["test", "--config", str(telegram_config)]) == 0
+    assert [(cfg.chat_id, token) for cfg, token in sent] == [(42, "tok")]
+    assert capsys.readouterr().out == "telegram: ok\n"
+    assert os.environ["MY_BOT"] == "tok"  # test leaves the environment alone
+
+
+def test_test_reports_a_failing_sink(telegram_config, monkeypatch, capsys):
+    def failing(cfg, token, text):
+        raise SinkError("Telegram error 400: chat not found")
+
+    monkeypatch.setenv("MY_BOT", "tok")
+    monkeypatch.setattr(telegram, "send_text", failing)
+    assert cli.main(["test", "--config", str(telegram_config)]) == 1
+    assert capsys.readouterr().out == "telegram: Telegram error 400: chat not found\n"
+
+
+def test_test_reports_a_missing_token(telegram_config, monkeypatch, capsys):
+    monkeypatch.delenv("MY_BOT", raising=False)
+    monkeypatch.setattr(telegram, "send_text", lambda *a: pytest.fail("sent without a token"))
+    assert cli.main(["test", "--config", str(telegram_config)]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("telegram: ") and "MY_BOT" in out
+
+
+def test_test_without_a_sink_fails(config, capsys):
+    assert cli.main(["test", "--config", str(config)]) == 1
+    assert "no sink configured" in capsys.readouterr().err

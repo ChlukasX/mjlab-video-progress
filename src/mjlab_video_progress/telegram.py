@@ -18,6 +18,9 @@ Contract:
   (no parse mode), cut to 1024 characters. A missing or unreadable video raises ``OSError``
   before any request. A video over ``MAX_VIDEO_BYTES`` raises ``SinkError`` without a request.
   One attempt only; retries are the caller's business.
+- ``send_text(cfg, token, text, post=urlopen_post)`` sends ``text`` to the chat with
+  ``sendMessage`` (form-urlencoded ``chat_id`` and ``text``, plain text). Used by the ``test``
+  command. Answers, errors and redaction as for ``deliver_telegram``.
 - ``SinkError`` covers: an answer with ``ok`` false (the message has the error code, the
   description and, if given, ``parameters.retry_after``), an answer that is not a JSON object
   with an ``ok`` field, and a transport that raises ``OSError`` (``URLError``, timeouts,
@@ -36,6 +39,7 @@ import json
 import os
 import stat
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
@@ -117,9 +121,6 @@ def _form(fields: dict[str, str], video: bytes) -> tuple[bytes, str]:
 def deliver_telegram(
     cfg: TelegramConfig, token: str, delivery: Delivery, post: Post = urlopen_post
 ) -> None:
-    def redact(text: str) -> str:
-        return text.replace(token, "<token>") if token else text
-
     size = delivery.video.stat().st_size
     if size > MAX_VIDEO_BYTES:
         raise SinkError(f"video is {size} bytes, over Telegram's limit of {MAX_VIDEO_BYTES} bytes")
@@ -135,9 +136,23 @@ def deliver_telegram(
         },
         delivery.video.read_bytes(),
     )
+    _call(token, "sendVideo", content_type, body, post)
+
+
+def send_text(cfg: TelegramConfig, token: str, text: str, post: Post = urlopen_post) -> None:
+    body = urllib.parse.urlencode({"chat_id": str(cfg.chat_id), "text": text}).encode()
+    _call(token, "sendMessage", "application/x-www-form-urlencoded", body, post)
+
+
+def _call(token: str, method: str, content_type: str, body: bytes, post: Post) -> None:
+    """One Bot API request; ``None`` when Telegram answers ``ok``, else ``SinkError``."""
+
+    def redact(text: str) -> str:
+        return text.replace(token, "<token>") if token else text
+
     try:
         status, answer = post(
-            f"{API_BASE}/bot{token}/sendVideo", {"Content-Type": content_type}, body
+            f"{API_BASE}/bot{token}/{method}", {"Content-Type": content_type}, body
         )
     except OSError as e:  # the URL, and so the token, can be in the message: do not chain it
         raise SinkError(

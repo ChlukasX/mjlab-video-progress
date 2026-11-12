@@ -27,8 +27,6 @@ and Windows.
 
 Planned:
 
-- A command that sends a test message to every configured sink, to check the setup (token, chat
-  id, network) without waiting for the first render.
 - Starting automatically with a training: a long-running `watch` that picks up each new `train`
   process (and its run directory) as it appears, instead of finding the runs once at start, so
   it does not have to be started by hand for every training.
@@ -124,6 +122,14 @@ an administrator and use `chat_id = "@channelname"`. Instead of `token_file` you
 `TELEGRAM_BOT_TOKEN` (or the variable named in `token_env`); `watch` removes it from its own
 environment before it starts `play`. Never put the token in the config or on a command line.
 Videos over 50 MB are not sent (Telegram's limit for bots).
+
+Check the setup (token, chat id, network) without waiting for the first render:
+
+```bash
+mjlab-video-progress test --config ~/.config/mjlab-video-progress/progress.toml
+```
+
+It sends one test message to the chat and prints `telegram: ok`, or the error.
 
 ### 5. Run
 

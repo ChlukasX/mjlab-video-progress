@@ -15,7 +15,7 @@
 
 ## Planned
 
-- [ ] `test` command: send a test message to every configured sink (token, chat id, network).
+- [x] `test` command: send a test message to every configured sink (token, chat id, network).
 - [ ] Pick up each new `train` process as it appears, instead of discovering runs once at start.
 
 ## Deferred (later version)

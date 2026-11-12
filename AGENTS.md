@@ -22,6 +22,7 @@ uv run pytest                            # tests/ ; ffmpeg-dependent tests skip 
 uv run ruff check .
 uv run ruff format --check .             # line length 100; rules E, F, I, B, UP
 uv run mjlab-video-progress watch --config PATH   # the tool itself (console script)
+uv run mjlab-video-progress test --config PATH    # send a test message through every sink
 ```
 
 Run all three of pytest, `ruff check` and `ruff format --check` before calling work done.
@@ -110,7 +111,8 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   transport `OSError`, or a video over 50,000,000 bytes (no request is sent). The token is
   redacted from every message and the original exception is not chained, since the URL holds the
   token. `post` is the injected transport; `urlopen_post` is the `urllib` default and returns an
-  HTTP error status instead of raising. One attempt, no retry. Not called by anything yet.
+  HTTP error status instead of raising. One attempt, no retry. `send_text(cfg, token, text, post)`
+  sends a plain `sendMessage` through the same request and error handling (used by `test`).
 - `watch.py`: `start(cfg, environ, proc_root, post)` returns a `Session(runs, state, sinks)`: it
   reads the Telegram token (`read_token`; `ConfigError` on a problem) and, when it came from the
   environment, removes that variable from `environ` (`os.environ` by default) so `play` never
@@ -129,8 +131,11 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   warnings (the other sinks still run); anything else, and a vanished run dir, propagates to
   `watch`. It never logs a sink (its repr can hold the token). `run_name(run)` is
   `<experiment>/<run>`, used in log lines.
-- `cli.py`: `main(argv)` is the `mjlab-video-progress` console script (`[project.scripts]`), one
-  subcommand `watch --config PATH`. It logs INFO to stderr, loads the config, calls
+- `cli.py`: `main(argv)` is the `mjlab-video-progress` console script (`[project.scripts]`), two
+  subcommands. `test --config PATH` sends a test message through each configured sink
+  (`telegram.send_text`) and prints `<sink>: ok` or `<sink>: <error>`; exit 0 only if all
+  worked (1 also for no sink). No discovery, no render, the environment is left alone.
+  `watch --config PATH` logs INFO to stderr, loads the config, calls
   `watch.start`, logs `watching N run(s): ...` and runs `watch.watch`. A `ConfigError` or
   `DiscoveryError` prints `error: <message>` and returns 1; any other exception shows its
   traceback. While the loop runs SIGTERM is turned into `SystemExit` (the old handler is restored
@@ -257,11 +262,12 @@ the mp4 completeness check and running `play` (`render.py`); the video store (`s
 Telegram sink (`telegram.py`, `sinks.py`); and the startup and polling loop (`start`, `watch` and
 `poll_run` in `watch.py`). Unit tests (`tests/test_config.py` 64, `tests/test_discovery.py` 58,
 `tests/test_scan.py` 20, `tests/test_render.py` 30, `tests/test_store.py` 9,
-`tests/test_telegram.py` 38, `tests/test_watch.py` 33, `tests/test_cli.py` 15; 267 passing on
+`tests/test_telegram.py` 41, `tests/test_watch.py` 33, `tests/test_cli.py` 19; 274 passing on
 Linux, none skipped, plus ruff clean). The two real-`/proc` tests (process listing smoke test,
 run-dir lookup via the real `cwd` link) skip on macOS and pass on Linux. The CLI tests patch out
 `start` and `watch`, plus two run the real CLI in a subprocess against a fake `play` and send it
-SIGTERM and SIGINT. The `docs` sink and the GPU load gate are not implemented yet.
+SIGTERM and SIGINT. The `test` command's `send_text` (`sendMessage`) sent one real message on
+2026-11-12 (`telegram: ok`); its error paths only ran against a fake transport. The `docs` sink and the GPU load gate are not implemented yet.
 
 Real runs (Linux, 2026-11-12): `watch` ran from the CLI against two live mjlab trainings
 (one resumed from a checkpoint, each with its own config), with

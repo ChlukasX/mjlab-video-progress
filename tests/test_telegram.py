@@ -1,4 +1,5 @@
-"""Contract tests for telegram: read_token, deliver_telegram and urlopen_post. No real network."""
+"""Contract tests for telegram: read_token, deliver_telegram, send_text and urlopen_post.
+No real network."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import parse_qs
 
 import pytest
 
@@ -18,7 +20,7 @@ from mjlab_video_progress import telegram
 from mjlab_video_progress.config import TelegramConfig
 from mjlab_video_progress.exceptions import ConfigError, SinkError
 from mjlab_video_progress.sinks import Delivery
-from mjlab_video_progress.telegram import deliver_telegram, read_token, urlopen_post
+from mjlab_video_progress.telegram import deliver_telegram, read_token, send_text, urlopen_post
 
 TOKEN = "123456:SECRET-token_value"
 VIDEO = b"\x00\xffvideo\r\nbytes\x80"
@@ -226,6 +228,31 @@ def test_missing_video_raises_oserror_before_any_request(delivery):
     with pytest.raises(FileNotFoundError):
         send(delivery, post)
     assert post.calls == []
+
+
+# --- send_text ----------------------------------------------------------------------------------
+
+
+def test_send_text_is_one_send_message_request():
+    post = FakePost()
+    send_text(TelegramConfig(chat_id=-100), TOKEN, "hi & bye", post)
+    [(url, headers, body)] = post.calls
+    assert url == f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    assert headers == {"Content-Type": "application/x-www-form-urlencoded"}
+    assert parse_qs(body.decode(), strict_parsing=True) == {
+        "chat_id": ["-100"],
+        "text": ["hi & bye"],
+    }
+
+
+@pytest.mark.parametrize(
+    "post",
+    [FakePost(400, api_error(400, f"chat not found for {TOKEN}")), FakePost(raises=URLError)],
+)
+def test_send_text_failure_is_a_sink_error_without_the_token(post):
+    with pytest.raises(SinkError) as e:
+        send_text(TelegramConfig(chat_id=1), TOKEN, "hi", post)
+    assert TOKEN not in str(e.value)
 
 
 # --- urlopen_post, against a loopback server -----------------------------------------------------

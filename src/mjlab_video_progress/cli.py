@@ -1,16 +1,21 @@
-"""CLI: ``mjlab-video-progress watch --config PATH``.
+"""CLI: ``mjlab-video-progress watch|test --config PATH``.
 
 Contract:
 
 - ``main(argv=None) -> int`` is the console script's entry point (``pyproject.toml`` points
-  ``[project.scripts] mjlab-video-progress`` at it). ``argparse`` has one subcommand, ``watch``,
-  which needs ``--config PATH``; a missing subcommand, a missing ``--config`` or an unknown
-  argument is argparse's own error (usage on stderr, ``SystemExit`` with code 2), and ``--help``
-  exits 0.
+  ``[project.scripts] mjlab-video-progress`` at it). ``argparse`` has two subcommands,
+  ``watch`` and ``test``, each needing ``--config PATH``; a missing subcommand, a missing
+  ``--config`` or an unknown argument is argparse's own error (usage on stderr, ``SystemExit``
+  with code 2), and ``--help`` exits 0.
 - ``watch``: sets up logging (``logging.basicConfig``, INFO, to stderr, with time, level and
   logger name), loads the config with ``load_config``, calls ``watch.start(cfg)``, logs
   ``watching N run(s): <experiment>/<run>, ...`` and calls ``watch.watch(cfg, session)``.
   ``watch.start`` and ``watch.watch`` are looked up on the ``watch`` module when called.
+- ``test``: loads the config and sends ``TEST_MESSAGE`` through every configured sink
+  (``telegram.send_text``, looked up when called), printing ``<sink>: ok`` or
+  ``<sink>: <error>`` per sink to stdout. Returns 0 if every sink worked, 1 if one failed (a
+  ``ConfigError`` such as a missing token, or a ``SinkError``) or no sink is configured. It does
+  no discovery and no render, and leaves the environment alone.
 - A ``ConfigError`` (from the config or from ``start``, for example the Telegram token) or a
   ``DiscoveryError`` prints ``error: <message>`` to stderr and returns 1. Nothing else is caught,
   so a bug shows its traceback.
@@ -30,11 +35,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from mjlab_video_progress import telegram as telegram_module
 from mjlab_video_progress import watch as watch_module
-from mjlab_video_progress.config import load_config
-from mjlab_video_progress.exceptions import ConfigError, DiscoveryError
+from mjlab_video_progress.config import Config, load_config
+from mjlab_video_progress.exceptions import ConfigError, DiscoveryError, SinkError
 
 log = logging.getLogger(__name__)
+
+TEST_MESSAGE = "mjlab-video-progress: test message, this sink works."
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -45,7 +53,24 @@ def _parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     watch = commands.add_parser("watch", help="watch a training run until stopped")
     watch.add_argument("--config", type=Path, required=True, help="path to the TOML config")
+    test = commands.add_parser("test", help="send a test message through every configured sink")
+    test.add_argument("--config", type=Path, required=True, help="path to the TOML config")
     return parser
+
+
+def _test(cfg: Config) -> int:
+    telegram = cfg.sinks.telegram
+    if telegram is None:
+        print("error: no sink configured", file=sys.stderr)
+        return 1
+    try:
+        token = telegram_module.read_token(telegram)
+        telegram_module.send_text(telegram, token, TEST_MESSAGE)
+    except (ConfigError, SinkError) as e:
+        print(f"telegram: {e}")
+        return 1
+    print("telegram: ok")
+    return 0
 
 
 def _exit_on_sigterm(signum, frame):
@@ -59,6 +84,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+    if args.command == "test":
+        try:
+            return _test(load_config(args.config))
+        except ConfigError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
     try:
         cfg = load_config(args.config)
         session = watch_module.start(cfg)
