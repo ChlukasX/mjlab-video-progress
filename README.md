@@ -72,12 +72,13 @@ Relative paths are relative to the config file. Optional keys:
    $EDITOR ~/.config/mjlab-video-progress/telegram_token
    ```
 
-3. Send your bot any message, then print your chat id (reads the token from the file, so it never
-   lands on a command line):
+3. Send your bot any message, then print your chat id:
 
    ```bash
-   python3 -c 'import json,os,urllib.request as u; t=open(os.path.expanduser("~/.config/mjlab-video-progress/telegram_token")).read().strip(); r=json.load(u.urlopen(f"https://api.telegram.org/bot{t}/getUpdates"))["result"]; print({c["id"]: c.get("title") or c.get("username") for c in (x.get("message", x.get("channel_post", {})).get("chat") for x in r) if c} or "no messages yet: send your bot a message first")'
+   mjlab-video-progress chat-id --token-file ~/.config/mjlab-video-progress/telegram_token
    ```
+
+   If it finds no chat, it says where else to get the id.
 
 4. Add to the config, then check it with `mjlab-video-progress test --config <config>` (prints
    `telegram: ok` or the error):

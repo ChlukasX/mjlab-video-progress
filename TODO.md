@@ -15,8 +15,8 @@
 
 ## Planned
 
-- [ ] `chat-id` command: print the chat ids the bot has seen (`getUpdates`, token read like
-  `watch` does), replacing the Python one-liner in README step 4.3.
+- [x] `chat-id` command: print the chat ids the bot has seen (`getUpdates`, token read like
+  `watch` does), or say where else to get the id; replaces the Python one-liner in the README.
 - [x] `test` command: send a test message to every configured sink (token, chat id, network).
 - [ ] Pick up each new `train` process as it appears, instead of discovering runs once at start.
 

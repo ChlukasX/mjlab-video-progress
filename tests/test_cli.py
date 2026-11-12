@@ -269,3 +269,51 @@ def test_test_reports_a_missing_token(telegram_config, monkeypatch, capsys):
 def test_test_without_a_sink_fails(config, capsys):
     assert cli.main(["test", "--config", str(config)]) == 1
     assert "no sink configured" in capsys.readouterr().err
+
+
+# --- chat-id ------------------------------------------------------------------------------------
+
+
+def chat_id_token(tmp_path):
+    path = tmp_path / "token"
+    path.write_text("tok\n")
+    path.chmod(0o600)
+    return path
+
+
+def test_chat_id_prints_every_chat(tmp_path, monkeypatch, capsys):
+    seen = []
+    chats = {7: "ann", -100: "Lab", 8: ""}
+    monkeypatch.setattr(telegram, "get_chats", lambda token: seen.append(token) or chats)
+    assert cli.main(["chat-id", "--token-file", str(chat_id_token(tmp_path))]) == 0
+    assert seen == ["tok"]
+    assert capsys.readouterr().out == "7  ann\n-100  Lab\n8\n"
+
+
+def test_chat_id_reads_the_environment_without_a_token_file(monkeypatch, capsys):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "envtok")
+    monkeypatch.setattr(telegram, "get_chats", lambda token: {1: token})
+    assert cli.main(["chat-id"]) == 0
+    assert capsys.readouterr().out == "1  envtok\n"
+
+
+def test_chat_id_without_chats_points_elsewhere(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(telegram, "get_chats", lambda token: {})
+    assert cli.main(["chat-id", "--token-file", str(chat_id_token(tmp_path))]) == 1
+    err = capsys.readouterr().err
+    assert "send your bot a message" in err.lower() and "@userinfobot" in err
+
+
+def test_chat_id_errors_are_reported(tmp_path, monkeypatch, capsys):
+    loose = chat_id_token(tmp_path)
+    loose.chmod(0o644)
+    monkeypatch.setattr(telegram, "get_chats", lambda token: pytest.fail("token not checked"))
+    assert cli.main(["chat-id", "--token-file", str(loose)]) == 1
+    assert "chmod 600" in capsys.readouterr().err
+
+    def failing(token):
+        raise SinkError("Telegram error 401: Unauthorized")
+
+    monkeypatch.setattr(telegram, "get_chats", failing)
+    assert cli.main(["chat-id", "--token-file", str(chat_id_token(tmp_path))]) == 1
+    assert "error: Telegram error 401: Unauthorized" in capsys.readouterr().err

@@ -23,6 +23,7 @@ uv run ruff check .
 uv run ruff format --check .             # line length 100; rules E, F, I, B, UP
 uv run mjlab-video-progress watch --config PATH   # the tool itself (console script)
 uv run mjlab-video-progress test --config PATH    # send a test message through every sink
+uv run mjlab-video-progress chat-id --token-file PATH   # list the chats the bot has seen
 ```
 
 Run all three of pytest, `ruff check` and `ruff format --check` before calling work done.
@@ -113,6 +114,7 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   token. `post` is the injected transport; `urlopen_post` is the `urllib` default and returns an
   HTTP error status instead of raising. One attempt, no retry. `send_text(cfg, token, text, post)`
   sends a plain `sendMessage` through the same request and error handling (used by `test`).
+  `get_chats(token, post)` returns `{chat id: name}` from `getUpdates` (used by `chat-id`).
 - `watch.py`: `start(cfg, environ, proc_root, post)` returns a `Session(runs, state, sinks)`: it
   reads the Telegram token (`read_token`; `ConfigError` on a problem) and, when it came from the
   environment, removes that variable from `environ` (`os.environ` by default) so `play` never
@@ -131,8 +133,11 @@ Needs `ffmpeg` and `ffprobe` on `PATH`. Python `>=3.11` (`tomllib` from the stan
   warnings (the other sinks still run); anything else, and a vanished run dir, propagates to
   `watch`. It never logs a sink (its repr can hold the token). `run_name(run)` is
   `<experiment>/<run>`, used in log lines.
-- `cli.py`: `main(argv)` is the `mjlab-video-progress` console script (`[project.scripts]`), two
-  subcommands. `test --config PATH` sends a test message through each configured sink
+- `cli.py`: `main(argv)` is the `mjlab-video-progress` console script (`[project.scripts]`), three
+  subcommands. `chat-id [--token-file PATH]` (token from the file, with `read_token`'s checks, else
+  `TELEGRAM_BOT_TOKEN`; no config needed) prints `<id>  <name>` per chat the bot has seen; with
+  none it explains how to get a message to the bot or the id from elsewhere, and returns 1.
+  `test --config PATH` sends a test message through each configured sink
   (`telegram.send_text`) and prints `<sink>: ok` or `<sink>: <error>`; exit 0 only if all
   worked (1 also for no sink). No discovery, no render, the environment is left alone.
   `watch --config PATH` logs INFO to stderr, loads the config, calls
@@ -262,11 +267,12 @@ the mp4 completeness check and running `play` (`render.py`); the video store (`s
 Telegram sink (`telegram.py`, `sinks.py`); and the startup and polling loop (`start`, `watch` and
 `poll_run` in `watch.py`). Unit tests (`tests/test_config.py` 64, `tests/test_discovery.py` 58,
 `tests/test_scan.py` 20, `tests/test_render.py` 30, `tests/test_store.py` 9,
-`tests/test_telegram.py` 41, `tests/test_watch.py` 33, `tests/test_cli.py` 19; 274 passing on
+`tests/test_telegram.py` 45, `tests/test_watch.py` 33, `tests/test_cli.py` 23; 282 passing on
 Linux, none skipped, plus ruff clean). The two real-`/proc` tests (process listing smoke test,
 run-dir lookup via the real `cwd` link) skip on macOS and pass on Linux. The CLI tests patch out
 `start` and `watch`, plus two run the real CLI in a subprocess against a fake `play` and send it
-SIGTERM and SIGINT. The `test` command's `send_text` (`sendMessage`) sent one real message on
+SIGTERM and SIGINT. `chat-id`'s `get_chats` (`getUpdates`) has only run against a fake
+transport. The `test` command's `send_text` (`sendMessage`) sent one real message on
 2026-11-12 (`telegram: ok`); its error paths only ran against a fake transport. The `docs` sink and the GPU load gate are not implemented yet.
 
 Real runs (Linux, 2026-11-12): `watch` ran from the CLI against two live mjlab trainings

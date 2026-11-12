@@ -19,8 +19,9 @@ Contract:
 - ``chat-id``: reads the bot token with ``telegram.read_token`` (from ``--token-file``, with its
   permission checks, else from ``TELEGRAM_BOT_TOKEN``), calls ``telegram.get_chats`` (looked up
   when called) and prints ``<id>  <name>`` per chat to stdout, returning 0. It needs no config,
-  since the chat id is what it finds. No chat, a ``ConfigError`` or a ``SinkError`` prints
-  ``error: <message>`` to stderr and returns 1.
+  since the chat id is what it finds. No chat prints ``NO_CHATS`` (how to get a message to the
+  bot, or the id from elsewhere); that, a ``ConfigError`` or a ``SinkError`` goes to stderr
+  and returns 1.
 - A ``ConfigError`` (from the config or from ``start``, for example the Telegram token) or a
   ``DiscoveryError`` prints ``error: <message>`` to stderr and returns 1. Nothing else is caught,
   so a bug shows its traceback.
@@ -46,6 +47,12 @@ from mjlab_video_progress.config import Config, TelegramConfig, load_config
 from mjlab_video_progress.exceptions import ConfigError, DiscoveryError, SinkError
 
 log = logging.getLogger(__name__)
+
+NO_CHATS = """\
+error: your bot has not seen any chat yet (Telegram keeps its messages for about a day).
+Send your bot a message (for a group: add the bot and post there), then run this again.
+Or get the id elsewhere: message @userinfobot for your own id, or use "@channelname" as
+chat_id for a public channel the bot administers."""
 
 TEST_MESSAGE = "mjlab-video-progress: test message, this sink works."
 
@@ -76,7 +83,7 @@ def _chat_id(token_file: Path | None) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     if not chats:
-        print("error: no chats yet: send your bot a message first", file=sys.stderr)
+        print(NO_CHATS, file=sys.stderr)
         return 1
     for chat, name in chats.items():
         print(f"{chat}  {name}".rstrip())
